@@ -1,52 +1,41 @@
 #pragma once
-#include <generation.hpp>
+#include <generation/generation.hpp>
 #include <iostream>
 #include <vector>
+#include <random>
+
+namespace generation {
 
 struct ForestMaskGenerator {
-    float limit = {};
-    
-    ForestMaskGenerator(float l) : limit(l) {
-        std::cout << "[INIT] ForestMaskGenerator created with limit: " << limit << "\n";
+    float limit = {};       // Height where trees approximately hit 0%
+    float steepness = {};   // Higher value = trees forced lower into valleys
+
+    ForestMaskGenerator(float l, float s) : limit(l), steepness(s) {
+        std::cout << "[INIT] ForestMaskGeneratorSteep created with limit: " << limit << " and steepness: " << steepness << "\n";
     }
-    
+
     std::expected<void, GenError> apply(Grid& grid) {
-        std::cout << "[WORK] ForestMaskGenerator calculating fertile areas...\n";
-        for (auto& cell : grid.get_all_cells()){
-            cell.forest_mask = (cell.height > limit) ? 0.0f : 1.0f - (cell.height / limit);
-        }
-        return {};
-    }
-
-    std::string get_name() const { return "ForestMaskGenerator"; }
-};
-
-struct ForestPlacementGenerator {
-    float density = {};
-    std::mt19937 gen;
-    std::uniform_real_distribution<float> dist;
-
-    ForestPlacementGenerator(float d) : density(d), gen(std::random_device()()), dist(0.0f, 1.0f) {
-        std::cout << "[INIT] ForestPlacementGenerator created with density: " << density << "\n";
-    }
-
-    std::expected<void, GenError> apply(Grid& grid){
-        std::cout << "[WORK] ForestPlacementGenerator planting trees stochastically...\n";
-        for (auto& cell: grid.get_all_cells()){
-            float noise = dist(gen);
-            if (noise < (cell.forest_mask * density)) {
-                cell.textureId = 2; // Tree
-            }
-            else if (cell.height > 0.8f){
-                cell.textureId = 1; // Peak
+        std::cout << "[WORK] ForestMaskGeneratorSteep calculating fertile areas...\n";
+        for (auto [x, y, cell] : grid.iter()) {
+            if (cell.height > limit) {
+                // Rare "Stunted" tree chance even above limit
+                cell.forest_mask = 0.5f;
             } else {
-                cell.textureId = 0; // Grass
+                // Normalized height (0 to 1) relative to the tree limit
+                float h_norm = cell.height / limit;
+                // Apply steepness curve
+                // Formula: 1 - (h_norm ^ steepness)
+                // If steepness = 1.0: Linear decay
+                // If steepness = 2.0: Quadratic decay (trees die off faster)
+                // If steepness = 0.5: Inverse quadratic decay (trees die off slower)
+                cell.forest_mask = std::clamp(1.0f - std::pow(h_norm, steepness), 0.0f, 1.0f);
             }
+
         }
         return {};
     }
 
-    std::string get_name() const { return "ForestPlacementGenerator"; }
+    std::string get_name() const { return "ForestMaskGeneratorSteep"; }
 };
 
 struct GaussianForestSeeder {
@@ -64,27 +53,65 @@ struct GaussianForestSeeder {
 
     std::expected<void, GenError> apply(Grid& grid) {
         std::cout << "[WORK] GaussianForestSeeder clusters applying...\n";
-        for (size_t y = 0; y < grid.get_height(); ++y) {
-            for (size_t x = 0; x < grid.get_width(); ++x) {
-                Cell& cell = grid(x, y);
-                float total_weight = 0.0f;
+        for (auto [x, y, cell] : grid.iter()) {
+            float total_weight = 0.0f;
 
-                for (const auto& s : clusters) {
-                    float dx = (static_cast<float>(x) - s.x);
-                    float dy = (static_cast<float>(y) - s.y);
-                    
-                    // Multivariate Gaussian Formula
-                    float exponent = -( (dx*dx)/(2*s.sx*s.sx) + (dy*dy)/(2*s.sy*s.sy) );
-                    total_weight += s.amp * std::exp(exponent);
-                }
-
-                // IMPORTANT: The Gaussian weight is MULTIPLIED by the height mask
-                // This ensures that even if a "cluster" is centered on a mountain,
-                // the height mask suppresses the trees.
-                cell.forest_mask = std::clamp(total_weight * cell.forest_mask, 0.0f, 1.0f);
+            for (const auto& s : clusters) {
+                float dx = x - s.x;
+                float dy = y - s.y;
+                
+                // Multivariate Gaussian Formula
+                float exponent = -( (dx*dx)/(2*s.sx*s.sx) + (dy*dy)/(2*s.sy*s.sy) );
+                total_weight += s.amp * std::exp(exponent);
             }
+
+            // IMPORTANT: The Gaussian weight is MULTIPLIED by the height mask
+            // This ensures that even if a "cluster" is centered on a mountain,
+            // the height mask suppresses the trees.
+            cell.forest_mask = std::clamp(total_weight * cell.forest_mask, 0.0f, 1.0f);
         }
         return {};
     }
     std::string get_name() const { return "GaussianClustering"; }
 };
+
+struct ForestPlacementGenerator {
+    bool allow_anomalies = true;
+    float anomaly_chance = 0.005f;
+    float density = {};
+    std::mt19937 gen = std::mt19937(std::random_device()());
+    std::uniform_real_distribution<float> dist = std::uniform_real_distribution<float>(0.0f, 1.0f);
+
+    ForestPlacementGenerator(float d) : density(d) {
+        std::cout << "[INIT] ForestPlacementGenerator created with density: " << density << "\n";
+    }
+
+    ForestPlacementGenerator(float d, uint32_t seed) : density(d), gen(seed) {
+        std::cout << "[INIT] ForestPlacementGenerator created with density: " << density << " and fixed seed: " << seed << "\n";
+    }
+
+    std::expected<void, GenError> apply(Grid& grid){
+        std::cout << "[WORK] ForestPlacementGenerator planting trees stochastically...\n";
+        for (auto& cell: grid.cells()){
+            float noise = dist(gen);
+            
+            // Spawn if we meet the density threshold OR if it's a valid anomaly
+            bool should_spawn = (noise < (cell.forest_mask * density)) || 
+                                (allow_anomalies && cell.height < 0.95f && noise < anomaly_chance);
+            
+            if (should_spawn) {
+                cell.terrain = TerrainType::Tree;
+            }
+            else if (cell.height > 0.8f){
+                cell.terrain = TerrainType::Mountain;
+            } else {
+                cell.terrain = TerrainType::Grass;
+            }
+        }
+        return {};
+    }
+
+    std::string get_name() const { return "ForestPlacementGenerator"; }
+};
+
+} // namespace generation

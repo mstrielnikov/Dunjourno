@@ -1,0 +1,143 @@
+#pragma once
+#include <vector>
+#include <cstdint>
+#include <expected>
+#include <stdexcept>
+#include <functional>
+#include <span>
+#include <ranges>
+#include <tuple>
+
+namespace generation {
+
+enum class GenError {
+    InvalidParameters, 
+    StepFailed, 
+    OutOfGridWidthBounds, 
+    OutOfGridLengthBounds,
+    SurfaceNullptr
+};
+
+enum class TerrainType : uint8_t {
+    Grass = 0,
+    Mountain,
+    Tree,
+    Water
+};
+
+struct Cell {
+    float height = 0.0f;        // 0.0 (sea level) to 1.0 (peak)
+    float forest_mask = 0.0f;   // 0.0 (no trees) to 1.0 (dense)
+    TerrainType terrain = TerrainType::Grass;
+};
+
+/**
+ * @brief Read-only view of a Grid for rendering systems without transferring ownership or allowing modification.
+ */
+struct GridView {
+private:
+    size_t width_;
+    size_t height_;
+    std::span<const Cell> cells_;
+
+public:
+    GridView() : width_(0), height_(0), cells_() {}
+    GridView(size_t w, size_t h, std::span<const Cell> c) : width_(w), height_(h), cells_(c) {}
+
+    size_t width() const noexcept { return width_; }
+    size_t height() const noexcept { return height_; }
+    
+    const Cell& operator()(size_t x, size_t y) const noexcept {
+        return cells_[y * width_ + x];
+    }
+
+    auto iter() const {
+        return std::views::iota(0u, cells_.size()) | std::views::transform([this](size_t idx) -> std::tuple<size_t, size_t, const Cell&> {
+            return {idx % width_, idx / width_, cells_[idx]};
+        });
+    }
+};
+
+/**
+ * @brief 2D Grid structure for cellular automata and terrain generation.
+ * Optimized for cache locality with a flat vector storage.
+ */
+struct Grid {
+private:
+    size_t width_;
+    size_t height_;
+    std::vector<Cell> cells_;
+
+    explicit Grid(size_t width, size_t height)
+        : width_(width), height_(height) {
+        cells_.resize(width_ * height_);
+    }
+
+public:
+    /**
+     * @brief Safe factory method for creating Grids without throwing.
+     */
+    static std::expected<Grid, GenError> create(size_t width, size_t height) noexcept {
+        if (width == 0 || height == 0) return std::unexpected(GenError::InvalidParameters);
+        try {
+            return Grid(width, height);
+        } catch (const std::bad_alloc&) {
+            return std::unexpected(GenError::SurfaceNullptr);
+        }
+    }
+
+    // --- Capacity ---
+    size_t width()  const noexcept { return width_; }
+    size_t height() const noexcept { return height_; }
+    size_t size()   const noexcept { return cells_.size(); } 
+    bool empty()    const noexcept { return cells_.empty(); }
+
+    // --- Views ---
+    GridView view() const noexcept {
+        return GridView(width_, height_, std::span<const Cell>(cells_));
+    }
+
+    // --- Unchecked Access ---
+    Cell& operator()(size_t x, size_t y) noexcept {
+        return cells_[y * width_ + x];
+    }
+    const Cell& operator()(size_t x, size_t y) const noexcept {
+        return cells_[y * width_ + x];
+    }
+
+    /**
+     * @brief Returns a C++23 view yielding [x, y, Cell&] tuples with bounds checking.
+     */
+    auto iter() {
+        return std::views::iota(0u, cells_.size()) | std::views::transform([this](size_t idx) -> std::tuple<size_t, size_t, Cell&> {
+            return {idx % width_, idx / width_, cells_[idx]};
+        });
+    }
+
+    /**
+     * @brief Returns a C++23 view yielding [x, y, const Cell&] tuples with bounds checking.
+     */
+    auto iter_const() const {
+        return std::views::iota(0u, cells_.size()) | std::views::transform([this](size_t idx) -> std::tuple<size_t, size_t, const Cell&> {
+            return {idx % width_, idx / width_, cells_[idx]};
+        });
+    }
+
+    // --- Raw Data Access ---
+    std::vector<Cell>& cells() noexcept { return cells_; }
+    const std::vector<Cell>& cells() const noexcept { return cells_; }
+
+    // --- Lifecycle ---
+    Grid(const Grid&) = delete;            
+    Grid& operator=(const Grid&) = delete;
+
+    Grid(Grid&&) noexcept = default;
+    Grid& operator=(Grid&&) noexcept = default;
+
+    // --- Utility ---
+    size_t memory_usage() const noexcept {
+        return cells_.size() * sizeof(Cell);
+    }
+};
+
+} // namespace generation

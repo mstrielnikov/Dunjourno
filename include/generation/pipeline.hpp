@@ -1,14 +1,11 @@
 #pragma once
-#include <generation.hpp>
+#include "generation.hpp"
 #include <tuple>
 #include <format>
 #include <iostream>
+#include <memory>
 
-template <typename T>
-concept PipelineType = requires(T t, Grid& grid) {
-    { t.execute(grid) } -> std::same_as<std::expected<void, GenError>>;
-};
-
+namespace generation {
 
 template <GeneratorLayer... Layers>
 struct Pipeline {
@@ -16,6 +13,9 @@ struct Pipeline {
     
     explicit Pipeline(Layers... s) : layers(std::move(s)...) {}
 
+    /**
+     * @brief Executes the pipeline on a raw Grid reference for stack-allocated or externally managed grids
+     */
     std::expected<void, GenError> execute(Grid& grid) {
         std::cout << "--- Executing Static Pipeline ---\n";
         
@@ -35,4 +35,14 @@ struct Pipeline {
         
         return status;
     }
+
+    /**
+     * @brief Convenience overload for shared_ptr managed grids
+     */
+    std::expected<void, GenError> execute(std::shared_ptr<Grid> grid) {
+        if (!grid) return std::unexpected(GenError::InvalidParameters);
+        return execute(*grid);
+    }
 };
+
+} // namespace generation
