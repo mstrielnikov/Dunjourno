@@ -1,6 +1,6 @@
 # Compiler and Linker
 CXX      := .toolchain/llvm/bin/clang++
-CXXFLAGS := -std=c++23 -Wall -Wextra -g -Iinclude -stdlib=libc++
+CXXFLAGS := -std=c++23 -Wall -Wextra -g -Iinclude -Isrc/generation -stdlib=libc++
 LDFLAGS  := -fuse-ld=lld -static -stdlib=libc++ -lc++abi -lunwind -lpthread -ldl
 
 # Project Structure

@@ -1,3 +1,4 @@
+#pragma once
 #include <generation.hpp>
 #include <tuple>
 #include <format>
@@ -7,6 +8,7 @@ template <typename T>
 concept PipelineType = requires(T t, Grid& grid) {
     { t.execute(grid) } -> std::same_as<std::expected<void, GenError>>;
 };
+
 
 template <GeneratorLayer... Layers>
 struct Pipeline {
