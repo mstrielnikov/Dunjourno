@@ -1,37 +1,31 @@
-#include "graphicalEngine.h"
-#include "unistd.h"
-
-static float defaultProbability = 0.45;
-static int DethLim = 3;
-static int BirthLim = 4;
-static unsigned width = 80;
-static unsigned height = 80;
-static unsigned iterationOrd = 17;
-
-static unsigned scale = 1;
-static char const * defaultPath ="/home/max/Projects/AutomataDungeone/buffer/dungeone.png";
-
-static unsigned window_x = 0;
-static unsigned window_y = 0;
-static unsigned window_width = 640;
-static unsigned window_height = 480;
+#include <iostream>
+#include <memory>
+#include "include/pipeline.hpp"
 
 
 int main(){
-    CellAutomat Map(defaultProbability, DethLim, BirthLim, width, height);
-    Map.runSimulation();
-    Map.update(iterationOrd);
-    Png pic(Map.synthesis(), defaultPath, scale, stounPalette, cavePalette);
+    auto grid = std::make_unique<Grid>(128, 128);
 
-//    Png pic(Map.synthesis(), defaultPath, scale,  oceanPalette, stounPalette);
-//    Png pic(map, defaultPath, scale, sandPalette, forestPalette);
-    pic.genPng();
+    std::cout << "--- Composing Pipeline (Lazy Initialization) ---\n";
+    auto pipeline = Pipeline(
+        LandscapeGenerator{12.0f},
+        ForestMaskGenerator{0.6f},
+        ForestPlacementGenerator{0.5f}
+    );
 
-    Graphics Engine(defaultPath, window_x, window_y, window_width, window_height);
-    SDL_Event event;
-    while(event.type!= SDL_QUIT){
-        SDL_PollEvent(&event);
-        Engine.draw();
+    std::cout << "\n--- Evaluating layer composition... ---\n\n";
+    pipeline.execute(*grid);
+
+    // Visual feedback
+    for (size_t y = 0; y < grid->get_height(); ++y) {
+        for (size_t x = 0; x < grid->get_width(); ++x) {
+            uint32_t id = (*grid)(x, y).textureId;
+            if (id == 2) std::cout << "Y";      // Tree
+            else if (id == 1) std::cout << "^"; // Mountain
+            else std::cout << ".";             // Grass
+        }
+        std::cout << "\n";
     }
+
     return 0;
 }

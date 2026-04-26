@@ -1,0 +1,11 @@
+# Build sandbox
+.toolchain
+vcpkg
+vcpkg_installed
+
+# Compiled binaries
+bin
+build
+build-wasm
+*.o
+AutomataDungeone
