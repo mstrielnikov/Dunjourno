@@ -1,8 +1,13 @@
 #include <iostream>
 #include <memory>
+
+#define STB_PERLIN_IMPLEMENTATION
+#include <stb_perlin.h>
+#undef STB_PERLIN_IMPLEMENTATION
 #include "generation/pipeline.hpp"
 #include "generation/landscape.hpp"
 #include "generation/forest.hpp"
+#include "generation/mountain.hpp"
 
 using namespace generation;
 
@@ -36,7 +41,8 @@ int main(){
         RippleTerrainGenerator{5.0f},                       // Base landmass
         ForestMaskGenerator{0.6f, 2.0f},                    // Forest mask
         GaussianForestSeeder{ {20, 100, 15.0, 15.0, 1.8} }, // Specific groves
-        ForestPlacementGenerator{0.5f}                      // Final texture assignment
+        ForestPlacementGenerator{0.5f},                     // Final texture assignment
+        MountainRidgeGenerator{3.0f, 8.0f, 0.08f, 2.5f}    // Ridge sculpting
     );
 
     std::cout << "\n--- Evaluating layer composition... ---\n\n";

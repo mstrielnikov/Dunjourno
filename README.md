@@ -35,6 +35,22 @@ Uses a radial sine-wave distance field to create organic, island-like or cave-li
 $$\text{height} = \text{clamp}(0.5 + 0.5 \cdot \sin(\text{distance} + \text{frequency}), 0, 1)$$
 where `distance` is the normalized Euclidean distance from the center of the grid.
 
+### Mountain Ridge Generation
+
+Creates a prominent mountain ridge using a continuous sine wave for the spine and radial falloff for the sides. The base formula for height is:
+
+$$\text{height} = \text{clamp}(H_{peak} \cdot \cos^P\left(\frac{d}{\Delta x}\pi\right) + \text{noise}, 0, 1)$$
+
+Where:
+
+- $H_{peak}$ is the maximum `peak_height` (e.g., 3.0).
+- $P$ is the `falloff_power` (e.g., 2.5), controlling the steepness of the slope.
+- $\Delta x$ is the `noise_amplitude` (e.g., 8.0), determining the width of the ridge.
+- $\text{noise}$ is Perlin noise applied along the ridge for natural waviness.
+- $d$ is the shortest distance from a cell to the central spine.
+
+This creates a central "spine" of high elevation that tapers off sharply, simulating a real mountain range.
+
 ### Forest Masking
 
 Calculates where trees _could_ grow based on elevation. It uses a non-linear decay curve controlled by a steepness parameter.

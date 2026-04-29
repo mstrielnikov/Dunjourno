@@ -18,6 +18,7 @@ CXX      := em++
 CXXFLAGS := -std=c++23 -Wall -Wextra -Wno-missing-field-initializers -Os \
             -I$(WORKSPACE_ROOT)/include \
             -I$(WORKSPACE_ROOT)/src \
+            -I$(WORKSPACE_ROOT)/raylib-src/src/external \
             -DPLATFORM_WEB
 
 # ── Raylib (built from source for PLATFORM_WEB) ──

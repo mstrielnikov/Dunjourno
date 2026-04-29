@@ -7,7 +7,7 @@ all: $(TARGET)
 
 $(TARGET): main.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) -o $@
+	$(CXX) $(CXXFLAGS) -I$(WORKSPACE_ROOT)/vcpkg/installed/x64-linux/include $< $(LDFLAGS) -o $@
 
 clean:
 	rm -f $(TARGET)

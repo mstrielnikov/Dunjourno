@@ -12,7 +12,7 @@ const server = Bun.serve({
         const headers: Record<string, string> = {};
         if (path.endsWith(".wasm")) headers["Content-Type"] = "application/wasm";
         if (path.endsWith(".js"))   headers["Content-Type"] = "application/javascript";
-        return new Responsse(file, { headers });
+        return new Response(file, { headers });
     }
     return new Response("Not Found", { status: 404 });
   },

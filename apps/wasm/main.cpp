@@ -6,9 +6,12 @@
 
 #include <emscripten/emscripten.h>
 
+#include <stb_perlin.h>
+
 #include "generation/pipeline.hpp"
 #include "generation/landscape.hpp"
 #include "generation/forest.hpp"
+#include "generation/mountain.hpp"
 #include "generation/grid.hpp"
 #include "platform/diagnostics.hpp"
 
@@ -19,13 +22,33 @@ using namespace generation;
 static GridView g_grid_view;
 static Camera2D g_camera = {};
 
-void DrawGPUTile(float x, float y, float w, float h, Color baseColor) {
-    Vector2 top = { x, y };
-    Vector2 left = { x - w / 2.0f, y + h / 2.0f };
-    Vector2 right = { x + w / 2.0f, y + h / 2.0f };
-    Vector2 bottom = { x, y + h };
+void DrawGPUTile3D(float x, float y, float w, float h, float elevation, Color baseColor) {
+    // Top face
+    Vector2 top = { x, y - elevation };
+    Vector2 left = { x - w / 2.0f, y + h / 2.0f - elevation };
+    Vector2 right = { x + w / 2.0f, y + h / 2.0f - elevation };
+    Vector2 bottom = { x, y + h - elevation };
+    
     DrawTriangle(top, left, bottom, baseColor);
-    DrawTriangle(top, bottom, right, ColorBrightness(baseColor, -0.15f));
+    DrawTriangle(top, bottom, right, ColorBrightness(baseColor, -0.1f));
+
+    // If elevation > 0, draw sides
+    if (elevation > 0.0f) {
+        Vector2 left_base = { x - w / 2.0f, y + h / 2.0f };
+        Vector2 bottom_base = { x, y + h };
+        Vector2 right_base = { x + w / 2.0f, y + h / 2.0f };
+
+        Color leftColor = ColorBrightness(baseColor, -0.3f);
+        Color rightColor = ColorBrightness(baseColor, -0.5f);
+
+        // Left face
+        DrawTriangle(left, left_base, bottom_base, leftColor);
+        DrawTriangle(left, bottom_base, bottom, leftColor);
+
+        // Right face
+        DrawTriangle(bottom, bottom_base, right_base, rightColor);
+        DrawTriangle(bottom, right_base, right, rightColor);
+    }
 }
 
 void UpdateDrawFrame() {
@@ -49,9 +72,17 @@ void UpdateDrawFrame() {
                     
                     const Cell& cell = g_grid_view(x, y);
                     Color tint = {40, (unsigned char)(cell.height * 120.0f + 60.0f), 40, 255};
-                    if (cell.terrain == TerrainType::Mountain) tint = {110, 100, 90, 255};
+                    float elevation = 0.0f;
+
+                    if (cell.terrain == TerrainType::Mountain) {
+                        tint = {110, 100, 90, 255};
+                        elevation = cell.height * 80.0f; // Dramatic spine-to-edge spread
+                    } else if (cell.terrain == TerrainType::Tree) {
+                        tint = {20, 140, 40, 255};       // Distinct tree color
+                        elevation = 10.0f;               // Small flat bump for trees
+                    }
                     
-                    DrawGPUTile(isoX, isoY, 64.0f, 32.0f, tint);
+                    DrawGPUTile3D(isoX, isoY, 64.0f, 32.0f, elevation, tint);
                 }
             }
         EndMode2D();
@@ -81,7 +112,12 @@ int main() {
     
     g_grid_view = grid.view();
 
-    auto pipeline = Pipeline(RippleTerrainGenerator{6.0f}, ForestMaskGenerator{0.7f, 2.5f}, ForestPlacementGenerator{0.4f});
+    auto pipeline = Pipeline(
+        RippleTerrainGenerator{6.0f},
+        GaussianForestSeeder{ {20, 100, 15.0, 15.0, 1.8} },
+        ForestPlacementGenerator{0.4f},
+        MountainRidgeGenerator{3.0f, 8.0f, 0.08f, 2.5f}
+    );
     pipeline.execute(grid);
 
     g_camera = { .offset = { 600, 200 }, .target = { 0, 0 }, .rotation = 0.0f, .zoom = 0.5f };
