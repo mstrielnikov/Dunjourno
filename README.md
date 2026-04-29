@@ -1,6 +1,6 @@
-# Dunjourno
+# Donjourno
 
-**Dunjourno** is a high-performance, statically-linked C++23 surface generator designed for creating complex, layered dungeone maps. It uses an architecture of layer which provides composition API through variadic template `Pipeline` that allows for type-safe, compile-time composition of generation layers with lazy evaluation.
+**Donjourno** is a high-performance, statically-linked C++23 surface generator designed for creating complex, layered dungeone maps. It uses an architecture of layer which provides composition API through variadic template `Pipeline` that allows for type-safe, compile-time composition of generation layers with lazy evaluation.
 
 ## Architecture: The Layered Approach
 
@@ -12,7 +12,7 @@ The `Grid` is the central data structure representing the map. Each `Cell` conta
 
 - `height`: Normalized elevation (0.0 to 1.0).
 - `forest_mask`: Probability or density mask for vegetation.
-- `textureId`: Visual representation (0: Grass, 1: Mountain, 2: Tree).
+- `terrain`: Visual representation (`Grass`, `Mountain`, `Tree`, `Water`).
 
 ### 2. Generator Layers (Logic)
 
@@ -40,6 +40,7 @@ where `distance` is the normalized Euclidean distance from the center of the gri
 Calculates where trees _could_ grow based on elevation. It uses a non-linear decay curve controlled by a steepness parameter.
 $$\text{forest\_mask} = \begin{cases} 0.5 & \text{if } \text{height} > \text{limit} \text{ (Stunted trees)} \\ \text{clamp}(1.0 - (\frac{\text{height}}{\text{limit}})^{\text{steepness}}, 0, 1) & \text{otherwise} \end{cases}$$
 Where:
+
 - `limit`: The height threshold where the primary forest ends.
 - `steepness`: Power exponent ($1.0$ is linear, $>1.0$ is faster decay/clearer valleys, $<1.0$ is slower decay).
 
@@ -58,21 +59,37 @@ $$\text{is\_tree} = \text{random}(0, 1) < (\text{forest\_mask} \cdot \text{densi
 
 ### Building
 
-The project uses a recursive Make system. You can build the entire project or specific targets. It requires a modern Clang toolchain (LLVM 18+) and links statically against `libc++`.
+The project uses a recursive Make system. You can build the entire project or specific targets. It requires a Clang toolchain (LLVM 18+) or higher for native builds, and Emscripten (https://github.com/emscripten-core/emscripten) for WebAssembly build.
+
+**Native Targets:**
 
 ```bash
 make clean
-make cli   # Builds bin/dunjourno-cli
-make gui   # Builds bin/dunjourno-gui
-make       # Builds both
+make cli   # Builds bin/Donjourno-cli
+make gui   # Builds bin/Donjourno-gui
+make       # Builds both cli and gui
+```
+
+**WebAssembly Target:**
+
+```bash
+make setup-wasm # Bootstraps the local Emscripten sandbox and Python 3.11
+make wasm       # Builds the WebAssembly app to build-wasm/
 ```
 
 ### Running
 
-The binaries are located in the `bin/` directory.
+**Native:**
 
 ```bash
-./bin/dunjourno-cli
+make run            # Runs the GUI app
+./bin/Donjourno-cli # Runs the CLI app
+```
+
+**Web:**
+
+```bash
+make serve # Starts a local Bun server on port 8080 to host the Wasm build
 ```
 
 ## Example Composition
@@ -84,8 +101,12 @@ auto pipeline = Pipeline(
     GaussianForestSeeder{ {20, 100, 15.0, 15.0, 1.8} }, // Add specific groves
     ForestPlacementGenerator{0.5f}                      // Stochastic planting
 );
-pipeline.execute(*grid);
+pipeline.execute(grid);
 ```
+
+## Example GUI mode output
+
+![Scene rendering](./demo/image.png)
 
 ## Example CLI mode output
 
