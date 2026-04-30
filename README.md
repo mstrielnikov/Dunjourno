@@ -30,102 +30,126 @@ The `Pipeline` is a variadic template that composes multiple layers. It uses C++
 The terrain is generated through a multi-stage pipeline executed in order:
 
 ```
-MountainPlacement → MountainRidge → ThermalErosion → ForestMask → ForestPlacement → TerrainTexture
+HydraulicTerrain → ForestMask → ForestPlacement → TerrainTexture
 ```
 
-### 1. Mountain Placement
+### 1. Hydraulic Terrain Generation
 
-Creates irregular mountain footprints by placing $N$ random centers on the grid. Each mountain base is a **randomly-oriented ellipse** with two independent half-axis lengths, breaking the symmetry of a simple circle:
+A single physically-based layer that replaces explicit mountain placement with emergent topography. The implementation follows the Newtonian droplet model from [SimpleErosion](https://github.com/weigert/SimpleErosion).
 
-- $r_x = R_{base} \cdot \text{uniform}(0.5, 1.5)$ — semi-major axis
-- $r_y = R_{base} \cdot \text{uniform}(0.5, 1.5)$ — semi-minor axis (independent)
-- $\alpha = \text{uniform}(0, \pi)$ — rotation angle
+#### Phase 1 — Initial Heightmap
 
-For each cell, coordinates are rotated into the ellipse's local frame and the **normalized elliptical distance** is computed:
+A 2D heightmap is generated using multi-octave fractal Brownian motion (`fbm_2d`) built from a custom hash-based value noise function (zero external dependencies):
 
-$$d_{ellipse} = \sqrt{\frac{l_x^2}{r_x^2} + \frac{l_y^2}{r_y^2}}, \quad \begin{pmatrix} l_x \\ l_y \end{pmatrix} = \begin{pmatrix} \cos\alpha & \sin\alpha \\ -\sin\alpha & \cos\alpha \end{pmatrix} \begin{pmatrix} \Delta x \\ \Delta y \end{pmatrix}$$
+$$h(x, y) = H_{peak} \cdot \text{clamp}\left(\text{fbm}_2(x \cdot s, y \cdot s) \cdot 1.3 - 0.3, \, 0, \, 1\right)$$
 
-On top of the elliptical boundary, **angular noise perturbation** adds craggy lobes using multi-octave 1D hash noise (`fbm_1d`), with 4 octaves at 6× frequency and 2 octaves at 12× frequency:
+where $s$ is the noise scale (controls feature size) and $H_{peak}$ is the maximum height. The `fbm_2d` function uses 6 octaves with lacunarity 2.0 and gain 0.5. The value noise is built on a 2D lattice with smoothstep interpolation:
 
-$$b(\theta) = 0.4 + 1.2 \cdot (0.7 \cdot \text{fbm}(\theta \cdot 6) + 0.3 \cdot \text{fbm}(\theta \cdot 12))$$
+$$\text{value}(x, y) = \text{bilerp}(\text{hash}(x_0, y_0), \text{hash}(x_1, y_0), \text{hash}(x_0, y_1), \text{hash}(x_1, y_1), u, v)$$
 
-Within the perturbed boundary ($d_{ellipse} < b(\theta)$), height follows a smooth cosine falloff:
+where $u, v$ are smoothstep-filtered fractional coordinates and `hash` is a fast integer hash function.
 
-$$h = 0.5 \cdot \left(1 + \cos\left(\frac{d_{ellipse}}{b(\theta)} \cdot \pi\right)\right)$$
+#### Phase 2 — Newtonian Droplet Erosion
 
-### 2. Mountain Ridge Generation
+Water droplets are spawned at random grid positions and simulated with Newtonian physics. Each droplet has:
+- **Position** $(p_x, p_y)$ — fractional grid coordinates
+- **Velocity** $(s_x, s_y)$ — 2D speed vector
+- **Volume** $V$ — water quantity, decreasing via evaporation
+- **Sediment** $S$ — carried material
 
-Sculpts a prominent ridge spine through the mountain cells:
+At each timestep $\Delta t$:
 
-1. Picks two random mountain cells as ridge endpoints.
-2. Walks from A to B via linear interpolation, **perturbed laterally** by multi-octave 1D hash noise (`fbm_1d`) to form a worm-like spine path.
-3. For each mountain cell, computes the minimum distance to the spine.
-4. Assigns height using a power-cosine falloff from the spine with per-cell hash noise:
+**1. Surface normal acceleration.** The droplet is accelerated by the terrain's surface normal, weighted by its mass:
 
-$$h = H_{peak} \cdot \cos^P\left(\frac{d}{\Delta_{max}} \cdot \pi\right) \cdot (0.7 + 0.6 \cdot \text{hash}(x, y))$$
+$$\vec{s} \mathrel{+}= \frac{\Delta t \cdot \hat{n}_{xz}}{V \cdot \rho}$$
 
-Where $H_{peak}$ is the peak height, $P$ is the falloff power, and the hash breaks uniform radial slopes. Each cell also receives a **random roughness** value proportional to its ridge falloff:
+where $\hat{n}_{xz}$ is the horizontal component of the surface normal (computed via central differences) and $\rho$ is the droplet density.
 
-$$\text{roughness} = \text{clamp}(\text{hash}(x, y) \cdot \text{falloff} \cdot 1.5, 0, 1)$$
+**2. Friction damping.** Speed is reduced each step:
 
-### 3. Thermal Erosion
+$$\vec{s} \mathrel{\times}= (1 - \Delta t \cdot f)$$
 
-Simulates material slumping down steep slopes to reach a natural angle of repose. Over $N$ iterations, material flows from high cells to their steepest lower neighbor when the height difference exceeds the **talus threshold** $T$:
+**3. Unified erosion/deposition.** Sediment capacity is proportional to speed, volume, and height differential:
 
-$$\Delta h = (h_{current} - h_{neighbor} - T) \cdot \text{rate}$$
+$$C_{max} = V \cdot |\vec{s}| \cdot \max(h_{old} - h_{new}, \, 0)$$
 
-The erosion pass also **tracks roughness**: cells that lose material (exposed cliffs) increase in roughness, while cells that gain material (sediment valleys) decrease in roughness. This creates a physically-based roughness map that directly drives the rendering overlay.
+Both erosion and deposition use a single formula that approaches equilibrium:
 
-### 4. Terrain Texturing (Colouring Rules)
+$$S \mathrel{+}= \Delta t \cdot D \cdot (C_{max} - S)$$
+$$h(p) \mathrel{-}= \Delta t \cdot V \cdot D \cdot (C_{max} - S)$$
 
-The `TerrainTextureGenerator` assigns RGB colours to each cell based on terrain type, local steepness, and elevation:
+When $C_{max} > S$, the droplet erodes (picks up sediment). When $C_{max} < S$, it deposits. This unified approach produces smoother sediment redistribution than separate erosion/deposition branches.
 
-| Condition                                              | Colour         | RGB               |
-| ------------------------------------------------------ | -------------- | ----------------- |
-| **Mountain** — steep slope ($\text{steepness} > 0.05$) | Grey rock      | `(100, 100, 105)` |
-| **Mountain** — flat, high altitude ($h > 1.8$)         | Snow           | `(240, 240, 250)` |
-| **Mountain** — flat, lower altitude                    | Highland grass | `(90, 130, 80)`   |
-| **Tree**                                               | Dark green     | `(30, 100, 30)`   |
-| **Grass** — steep ($\text{steepness} > 0.08$)          | Dirt           | `(139, 115, 85)`  |
-| **Grass** — flat                                       | Green          | `(60, 140, 60)`   |
+**4. Evaporation.** Volume decreases each step:
 
-Steepness is computed per-cell using the central difference of neighboring heights:
+$$V \mathrel{\times}= (1 - \Delta t \cdot e)$$
 
-$$\text{steepness} = \sqrt{\left(\frac{h_{x+1} - h_{x-1}}{2}\right)^2 + \left(\frac{h_{y+1} - h_{y-1}}{2}\right)^2}$$
+The droplet dies when $V < V_{min}$ (default 0.01) or leaves the grid.
+
+**Default parameters** (tuned from SimpleErosion):
+
+| Parameter       | Default | Description                              |
+| --------------- | ------- | ---------------------------------------- |
+| `dt`            | 1.2     | Integration timestep                     |
+| `friction`      | 0.05    | Speed loss factor per step               |
+| `density`       | 1.0     | Droplet density (mass = V × ρ)           |
+| `depositionRate`| 0.1     | Rate of approach to equilibrium sediment |
+| `evaporationRate`| 0.01   | Volume loss per step                     |
+| `minVolume`     | 0.01    | Volume below which droplet dies          |
+
+#### Phase 3 — Terrain Classification
+
+After erosion, cells are classified as `Mountain` (height > threshold) or `Grass`. Roughness is derived from cumulative erosion activity at each cell, normalized and scaled by elevation.
+
+### 2. Forest Mask & Placement
+
+The `ForestMaskGenerator` computes a fertility mask based on elevation, **excluding mountain terrain entirely** (forest_mask = 0 for all `Mountain` cells). For grass cells, the mask decays with height:
+
+$$\text{mask} = \text{clamp}\left(1 - \left(\frac{h}{h_{limit}}\right)^{steepness}, \, 0, \, 1\right)$$
+
+The `ForestPlacementGenerator` then stochastically places trees where `random() < mask × density`.
+
+### 3. Terrain Texturing (Colouring Rules)
+
+The `TerrainTextureGenerator` uses **relative height thresholds** (computed from the actual max height) so coloring adapts to any terrain configuration:
+
+| Condition                                       | Colour         | RGB               |
+| ----------------------------------------------- | -------------- | ----------------- |
+| **Mountain** — flat, $h_{rel} > 0.75$           | Snow           | `(240, 240, 250)` |
+| **Mountain** — steep slope                      | Grey rock      | `(80–130, grey)`  |
+| **Mountain** — flat, $h_{rel} > 0.4$            | Brown rock     | `(110, 95, 75)`   |
+| **Mountain** — flat, low altitude               | Highland grass | `(90, 130, 80)`   |
+| **Tree**                                        | Dark green     | `(30, 100, 30)`   |
+| **Grass** — steep ($\text{steepness} > 0.08$)   | Dirt           | `(139, 115, 85)`  |
+| **Grass** — flat                                | Green          | `(60, 140, 60)`   |
+
+Steepness is computed per-cell using central differences. Grey rock colour is **altitude-dependent** — darker at lower elevations, lighter near peaks.
 
 ## Rendering Pipeline
 
 ### Isometric Projection
 
-The renderer projects 3D terrain onto 2D screen space using an isometric transformation:
-
 $$s_x = (x - y) \cdot 32, \quad s_y = (x + y) \cdot 16 - h \cdot 80$$
 
-### Sub-Grid Tessellation (Sharpness Control)
+### Sub-Grid Tessellation
 
-Each grid cell is subdivided into $N \times N$ micro-quads (controlled by the **"Subdiv Res"** UI slider, range 1–64) to increase geometric resolution without increasing the base grid size. Vertex heights are computed via **bilinear interpolation** of the four surrounding cell corners.
+Each grid cell is subdivided into $N \times N$ micro-quads (controlled by the **"Subdiv Res"** slider, 1–64). Vertex heights are computed via bilinear interpolation of the four surrounding cell corners.
 
-### Procedural Mesh Texturing (Roughness Overlay)
+### Procedural Roughness Overlay
 
-After bilinear interpolation, each sub-vertex receives a **procedural height jitter** driven by the cell's `roughness` field and the vertex's elevation:
+Each sub-vertex receives procedural height jitter driven by erosion-derived `roughness` and elevation:
 
 $$h' = h + (\text{hash}(x, y) - 0.5) \cdot \text{clamp}(h \cdot 1.5, 0, 1) \cdot \text{roughness}$$
 
-The hash is a fast, deterministic 2D integer hash function (no external noise library). This ensures:
-
-- **Flat plains** remain perfectly smooth (roughness ≈ 0, elevation ≈ 0).
-- **Mountain peaks** receive maximum rocky displacement (high roughness and elevation).
-- The pattern is **deterministic** — the same coordinates always produce the same jitter.
-
 ### Dynamic Lighting
 
-Per-triangle normals are computed from the 3D vertex positions and dot-producted with a sun direction vector controlled by the **"Time of Day"** slider (6:00 sunrise → 18:00 sunset):
+Per-triangle normals are dot-producted with a sun direction vector (controlled by "Time of Day", 6:00–18:00):
 
 $$I = \text{clamp}(0.35 + 0.8 \cdot \max(\hat{n} \cdot \hat{L}, 0), 0, 1)$$
 
 ### Geometry Caching
 
-All tessellation, noise, normal, and lighting calculations are performed **once** and cached in a `std::vector<CachedTriangle>`. The cache is invalidated only when UI parameters change (time of day, subdivision resolution). This reduces per-frame CPU cost to a simple array iteration of `DrawTriangle` calls.
+All tessellation, noise, normal, and lighting calculations are cached in `std::vector<CachedTriangle>`. The cache is invalidated only when UI parameters change, reducing per-frame cost to a simple `DrawTriangle` iteration.
 
 ## Usage
 
@@ -168,9 +192,7 @@ make serve # Starts a local server on port 8080 to host the Wasm build
 
 ```cpp
 auto pipeline = Pipeline(
-    MountainPlacementGenerator{3, 12.0f},                   // Place 3 mountains with radius 12
-    MountainRidgeGenerator{3.0f, 10.0f, 0.1f, 2.5f},       // Sculpt ridges with peak 3.0
-    ThermalErosionGenerator{0.15f, 0.1f, 8},                // Erode slopes, generate roughness
+    HydraulicTerrainGenerator{},                            // fBm heightmap + droplet erosion
     ForestMaskGenerator{0.6f, 2.0f},                        // Create fertility mask
     ForestPlacementGenerator{0.4f},                         // Stochastic planting
     TerrainTextureGenerator{}                               // Assign colours by biome
@@ -183,3 +205,4 @@ pipeline.execute(grid);
 ![Scene rendering](./demo/image1.png)
 
 ![Scene rendering](./demo/image2.png)
+

@@ -43,6 +43,43 @@ inline float fbm_1d(float x, uint32_t seed, int octaves = 4, float lacunarity = 
     return sum / max_amp;
 }
 
+// 2D value noise using hash-based lattice interpolation
+inline float value_noise_2d(float x, float y, uint32_t seed) {
+    float ix = std::floor(x);
+    float iy = std::floor(y);
+    float fx = x - ix;
+    float fy = y - iy;
+    float ux = fx * fx * (3.0f - 2.0f * fx);
+    float uy = fy * fy * (3.0f - 2.0f * fy);
+
+    uint32_t nx = static_cast<uint32_t>(ix);
+    uint32_t ny = static_cast<uint32_t>(iy);
+
+    float v00 = hash1d(nx + ny * 57U + seed);
+    float v10 = hash1d((nx + 1) + ny * 57U + seed);
+    float v01 = hash1d(nx + (ny + 1) * 57U + seed);
+    float v11 = hash1d((nx + 1) + (ny + 1) * 57U + seed);
+
+    float a = v00 + (v10 - v00) * ux;
+    float b = v01 + (v11 - v01) * ux;
+    return a + (b - a) * uy;
+}
+
+// Multi-octave 2D fractal noise (fBm)
+inline float fbm_2d(float x, float y, uint32_t seed, int octaves = 6, float lacunarity = 2.0f, float gain = 0.5f) {
+    float sum = 0.0f;
+    float amp = 1.0f;
+    float freq = 1.0f;
+    float max_amp = 0.0f;
+    for (int i = 0; i < octaves; ++i) {
+        sum += amp * value_noise_2d(x * freq, y * freq, seed + i * 31);
+        max_amp += amp;
+        amp *= gain;
+        freq *= lacunarity;
+    }
+    return sum / max_amp;
+}
+
 } // namespace noise
 
 /**

@@ -17,17 +17,17 @@ struct ForestMaskGenerator {
     std::expected<void, GenError> apply(Grid& grid) {
         std::cout << "[WORK] ForestMaskGeneratorSteep calculating fertile areas...\n";
         for (auto [x, y, cell] : grid.iter()) {
+            // No trees on mountains
+            if (cell.terrain == TerrainType::Mountain) {
+                cell.forest_mask = 0.0f;
+                continue;
+            }
+
             if (cell.height > limit) {
                 // Rare "Stunted" tree chance even above limit
                 cell.forest_mask = 0.5f;
             } else {
-                // Normalized height (0 to 1) relative to the tree limit
                 float h_norm = cell.height / limit;
-                // Apply steepness curve
-                // Formula: 1 - (h_norm ^ steepness)
-                // If steepness = 1.0: Linear decay
-                // If steepness = 2.0: Quadratic decay (trees die off faster)
-                // If steepness = 0.5: Inverse quadratic decay (trees die off slower)
                 cell.forest_mask = std::clamp(1.0f - std::pow(h_norm, steepness), 0.0f, 1.0f);
             }
 

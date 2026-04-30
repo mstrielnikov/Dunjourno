@@ -11,7 +11,7 @@ namespace generation {
  *
  * This pass computes the slope/steepness at each cell and uses it alongside
  * elevation to determine the terrain's biome/color (e.g., grass, rock, snow).
- * This establishes the base "texture" for the 3D continuous mesh.
+ * Uses relative height thresholds so coloring adapts to any terrain generator.
  */
 struct TerrainTextureGenerator {
     TerrainTextureGenerator() {
@@ -23,6 +23,12 @@ struct TerrainTextureGenerator {
 
         int w = (int)grid.width();
         int h = (int)grid.height();
+
+        // First pass: find max height for relative thresholds
+        float max_height = 0.01f;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                max_height = std::max(max_height, grid(x, y).height);
 
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
@@ -39,6 +45,9 @@ struct TerrainTextureGenerator {
                 }
                 float steepness = std::sqrt(dx * dx + dy * dy);
 
+                // Relative height: 0.0 = lowest, 1.0 = peak
+                float rel_h = cell.height / max_height;
+
                 // Default colors
                 uint8_t r = 60, g = 140, b = 60; // Base Grass
 
@@ -46,19 +55,21 @@ struct TerrainTextureGenerator {
                     // Darker green for trees
                     r = 30; g = 100; b = 30;
                 } else if (cell.terrain == TerrainType::Mountain) {
-                    // For mountains, color depends on steepness and height
-                    if (steepness > 0.05f) {
-                        // Steep rock: Grey
-                        r = 100; g = 100; b = 105;
-                    } else if (cell.height > 1.8f) { // If peak is ~3.0, >1.8 is high
+                    if (rel_h > 0.75f && steepness < 0.05f) {
                         // Flat high ground: Snow
                         r = 240; g = 240; b = 250;
+                    } else if (steepness > 0.05f) {
+                        // Steep rock: Grey, darker at lower altitudes
+                        float grey = 80.0f + 50.0f * rel_h;
+                        r = (uint8_t)grey; g = (uint8_t)grey; b = (uint8_t)(grey + 5);
+                    } else if (rel_h > 0.4f) {
+                        // Mid-altitude: Brown rock / highland
+                        r = 110; g = 95; b = 75;
                     } else {
-                        // Flat lower mountain ground: Highland grass / dirt
+                        // Low mountain: Highland grass / dirt
                         r = 90; g = 130; b = 80;
                     }
                 } else if (cell.terrain == TerrainType::Grass) {
-                    // Optional: Dirt patches based on steepness even in grass
                     if (steepness > 0.08f) {
                         r = 139; g = 115; b = 85; // Dirt
                     }
