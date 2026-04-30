@@ -19,7 +19,6 @@ inline float fbm(float x, float y, uint32_t seed, int octaves = 4, float lacunar
     float freq = 1.0f;
     float max_amp = 0.0f;
     for (int i = 0; i < octaves; ++i) {
-        // stb_perlin_noise3_seed returns [-1, 1], map it to [0, 1] for FBM consistency with previous code
         float n = stb_perlin_noise3_seed(x * freq, y * freq, 0.0f, 0, 0, 0, seed + i * 31);
         float mapped_n = (n + 1.0f) * 0.5f; 
         sum += amp * mapped_n;
@@ -30,6 +29,81 @@ inline float fbm(float x, float y, uint32_t seed, int octaves = 4, float lacunar
     return sum / max_amp;
 }
 } // namespace noise
+
+/**
+ * @brief Mountain Placement Generator
+ *
+ * Owns the full placement rule for mountains:
+ *   1. Randomly selects N center positions on the grid
+ *   2. For each center, fills a circular base area (radius in cells)
+ *      marking cells as TerrainType::Mountain
+ *   3. Sets initial height using a radial falloff from each center
+ *      so the peak is at the center and slopes to 0 at the edge
+ */
+struct MountainPlacementGenerator {
+    int   num_mountains = 3;       // Number of mountain centers to place
+    float base_radius   = 12.0f;   // Radius of each mountain base (in cells)
+
+    MountainPlacementGenerator(int count, float radius)
+        : num_mountains(count), base_radius(radius) {
+        std::cout << "[INIT] MountainPlacementGenerator count=" << num_mountains
+                  << " base_radius=" << base_radius << "\n";
+    }
+
+    std::expected<void, GenError> apply(Grid& grid) {
+        std::cout << "[WORK] MountainPlacementGenerator placing " << num_mountains << " mountains...\n";
+
+        if (num_mountains <= 0) return {};
+
+        std::mt19937 rng(std::random_device{}());
+        int w = (int)grid.width();
+        int h = (int)grid.height();
+
+        // Margin so mountains don't spawn clipped at edges
+        int margin = (int)std::ceil(base_radius * 0.5f);
+        std::uniform_int_distribution<int> dist_x(margin, std::max(margin, w - margin - 1));
+        std::uniform_int_distribution<int> dist_y(margin, std::max(margin, h - margin - 1));
+
+        struct Center { float x, y; };
+        std::vector<Center> centers;
+        centers.reserve(num_mountains);
+
+        for (int i = 0; i < num_mountains; ++i) {
+            centers.push_back({ (float)dist_x(rng), (float)dist_y(rng) });
+        }
+
+        // For each cell, check distance to the nearest mountain center
+        // If within base_radius, mark as Mountain and set height by radial falloff
+        for (auto [x, y, cell] : grid.iter()) {
+            float best_falloff = 0.0f;
+
+            for (const auto& c : centers) {
+                float dx = (float)x - c.x;
+                float dy = (float)y - c.y;
+                float dist = std::sqrt(dx * dx + dy * dy);
+
+                if (dist < base_radius) {
+                    // Smooth radial falloff: 1.0 at center, 0.0 at edge
+                    float norm = dist / base_radius;
+                    float falloff = 0.5f * (1.0f + std::cos(norm * 3.14159265f));
+                    best_falloff = std::max(best_falloff, falloff);
+                }
+            }
+
+            if (best_falloff > 0.01f) {
+                cell.terrain = TerrainType::Mountain;
+                // Height is the maximum contribution from any mountain center
+                cell.height = std::max(cell.height, best_falloff);
+            }
+        }
+
+        std::cout << "  Placed " << centers.size() << " mountain centers\n";
+        return {};
+    }
+
+    std::string get_name() const { return "MountainPlacement"; }
+};
+
 
 /**
  * @brief Mountain ridge generator using Perlin-noise perturbed spine paths
@@ -154,8 +228,6 @@ struct MountainRidgeGenerator {
             float norm_d = d / max_mountain_dist; // 0 = spine, 1 = furthest edge
 
             // Sharp falloff: cosine base raised to a power for dramatic spine prominence
-            // At spine (norm_d=0): cos(0)=1 → 1^power = 1.0  (full peak)
-            // At edge  (norm_d=1): cos(π)=-1 → mapped to 0   (ground level)
             float base_falloff = 0.5f * (1.0f + std::cos(norm_d * 3.14159265f));
             float falloff = std::pow(base_falloff, falloff_power);
 

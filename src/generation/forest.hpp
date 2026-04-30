@@ -93,6 +93,9 @@ struct ForestPlacementGenerator {
     std::expected<void, GenError> apply(Grid& grid){
         std::cout << "[WORK] ForestPlacementGenerator planting trees stochastically...\n";
         for (auto& cell: grid.cells()){
+            // Mountains are already placed upstream — never override them
+            if (cell.terrain == TerrainType::Mountain) continue;
+
             float noise = dist(gen);
             
             // Spawn if we meet the density threshold OR if it's a valid anomaly
@@ -101,9 +104,6 @@ struct ForestPlacementGenerator {
             
             if (should_spawn) {
                 cell.terrain = TerrainType::Tree;
-            }
-            else if (cell.height > 0.8f){
-                cell.terrain = TerrainType::Mountain;
             } else {
                 cell.terrain = TerrainType::Grass;
             }
