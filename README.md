@@ -35,15 +35,23 @@ MountainPlacement → MountainRidge → ThermalErosion → ForestMask → Forest
 
 ### 1. Mountain Placement
 
-Creates irregular mountain footprints by placing $N$ random centers on the grid. Each center has a unique random seed used to generate **angular noise perturbation**, breaking the circular base into craggy, organic shapes:
+Creates irregular mountain footprints by placing $N$ random centers on the grid. Each mountain base is a **randomly-oriented ellipse** with two independent half-axis lengths, breaking the symmetry of a simple circle:
 
-$$r(\theta) = R_{base} \cdot \left(0.4 + 1.2 \cdot \text{fbm}(\theta \cdot 6, \text{seed})\right)$$
+- $r_x = R_{base} \cdot \text{uniform}(0.5, 1.5)$ — semi-major axis
+- $r_y = R_{base} \cdot \text{uniform}(0.5, 1.5)$ — semi-minor axis (independent)
+- $\alpha = \text{uniform}(0, \pi)$ — rotation angle
 
-where $R_{base}$ is the configured base radius and $\text{fbm}$ is a 1D fractal Brownian motion function built from a custom integer hash (no external noise library). The noise uses 4 octaves at the primary frequency and 2 octaves at double frequency to produce both broad lobes and fine craggy detail.
+For each cell, coordinates are rotated into the ellipse's local frame and the **normalized elliptical distance** is computed:
 
-Within the perturbed radius, height follows a smooth cosine falloff from center to edge:
+$$d_{ellipse} = \sqrt{\frac{l_x^2}{r_x^2} + \frac{l_y^2}{r_y^2}}, \quad \begin{pmatrix} l_x \\ l_y \end{pmatrix} = \begin{pmatrix} \cos\alpha & \sin\alpha \\ -\sin\alpha & \cos\alpha \end{pmatrix} \begin{pmatrix} \Delta x \\ \Delta y \end{pmatrix}$$
 
-$$h = 0.5 \cdot (1 + \cos(\frac{d}{r(\theta)} \cdot \pi))$$
+On top of the elliptical boundary, **angular noise perturbation** adds craggy lobes using multi-octave 1D hash noise (`fbm_1d`), with 4 octaves at 6× frequency and 2 octaves at 12× frequency:
+
+$$b(\theta) = 0.4 + 1.2 \cdot (0.7 \cdot \text{fbm}(\theta \cdot 6) + 0.3 \cdot \text{fbm}(\theta \cdot 12))$$
+
+Within the perturbed boundary ($d_{ellipse} < b(\theta)$), height follows a smooth cosine falloff:
+
+$$h = 0.5 \cdot \left(1 + \cos\left(\frac{d_{ellipse}}{b(\theta)} \cdot \pi\right)\right)$$
 
 ### 2. Mountain Ridge Generation
 

@@ -78,35 +78,50 @@ struct MountainPlacementGenerator {
         int margin = (int)std::ceil(base_radius * 0.5f);
         std::uniform_int_distribution<int> dist_x(margin, std::max(margin, w - margin - 1));
         std::uniform_int_distribution<int> dist_y(margin, std::max(margin, h - margin - 1));
+        std::uniform_real_distribution<float> axis_scale(0.5f, 1.5f);
+        std::uniform_real_distribution<float> angle_dist(0.0f, 3.14159265f);
 
-        struct Center { float x, y; uint32_t seed; };
+        struct Center { float x, y, rx, ry, cos_a, sin_a; uint32_t seed; };
         std::vector<Center> centers;
         centers.reserve(num_mountains);
 
         for (int i = 0; i < num_mountains; ++i) {
-            centers.push_back({ (float)dist_x(rng), (float)dist_y(rng), static_cast<uint32_t>(rng()) });
+            float rx = base_radius * axis_scale(rng);  // Random semi-major axis
+            float ry = base_radius * axis_scale(rng);  // Random semi-minor axis
+            float a  = angle_dist(rng);                 // Random rotation
+            centers.push_back({
+                (float)dist_x(rng), (float)dist_y(rng),
+                rx, ry,
+                std::cos(a), std::sin(a),
+                static_cast<uint32_t>(rng())
+            });
         }
 
-        // For each cell, check distance to the nearest mountain center
-        // If within perturbed radius, mark as Mountain and set height by radial falloff
+        // For each cell, check elliptical distance to the nearest mountain center
         for (auto [x, y, cell] : grid.iter()) {
             float best_falloff = 0.0f;
 
             for (const auto& c : centers) {
+                // Translate to center-relative coordinates
                 float dx = (float)x - c.x;
                 float dy = (float)y - c.y;
-                float dist = std::sqrt(dx * dx + dy * dy);
 
-                // Perturb radius per-angle to break the perfect circle into craggy lobes
-                float angle = std::atan2(dy, dx);
-                // High-frequency angular noise: ~6 lobes with sub-octave detail
+                // Rotate into the ellipse's local frame
+                float lx = dx * c.cos_a + dy * c.sin_a;
+                float ly = -dx * c.sin_a + dy * c.cos_a;
+
+                // Normalized elliptical distance: 1.0 at the boundary
+                float ellipse_dist = std::sqrt((lx * lx) / (c.rx * c.rx) + (ly * ly) / (c.ry * c.ry));
+
+                // Angular perturbation on top of the ellipse shape
+                float angle = std::atan2(ly, lx);
                 float n1 = noise::fbm_1d(angle * 6.0f, c.seed, 4, 2.0f, 0.5f);
                 float n2 = noise::fbm_1d(angle * 12.0f, c.seed + 7777, 2, 2.0f, 0.4f);
                 float angular_noise = n1 * 0.7f + n2 * 0.3f;
-                float perturbed_radius = base_radius * (0.4f + 1.2f * angular_noise);
+                float perturbed_boundary = 0.4f + 1.2f * angular_noise;  // ~0.4 to ~1.6
 
-                if (dist < perturbed_radius) {
-                    float norm = dist / perturbed_radius;
+                if (ellipse_dist < perturbed_boundary) {
+                    float norm = ellipse_dist / perturbed_boundary;
                     float falloff = 0.5f * (1.0f + std::cos(norm * 3.14159265f));
                     best_falloff = std::max(best_falloff, falloff);
                 }
