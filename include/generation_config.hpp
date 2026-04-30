@@ -9,6 +9,8 @@ struct GenConfig {
     float mountain_peak    = 3.0f;    // Mountain peak height
     float mountain_power   = 2.5f;    // Mountain falloff power
     float forest_density   = 0.4f;    // Forest placement density
+    float time_of_day      = 15.0f;   // Sun angle (0 to 24 hours, 12 is noon)
+    float mesh_resolution  = 4.0f;    // Subdivision resolution per grid cell (e.g. 4 to 64)
 };
 
 }

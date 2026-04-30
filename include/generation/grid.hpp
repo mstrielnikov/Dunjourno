@@ -29,6 +29,7 @@ struct Cell {
     float height = 0.0f;        // 0.0 (sea level) to 1.0 (peak)
     float forest_mask = 0.0f;   // 0.0 (no trees) to 1.0 (dense)
     TerrainType terrain = TerrainType::Grass;
+    uint8_t r = 0, g = 0, b = 0; // Surface color computed by texturing pass
 };
 
 /**

@@ -133,6 +133,6 @@ pipeline.execute(grid);
 
 ## Example GUI mode output
 
-![Scene rendering](./demo/image_1.png)
+![Scene rendering](./demo/image1.png)
 
-![Scene rendering](./demo/image_2.png)
+![Scene rendering](./demo/image2.png)
