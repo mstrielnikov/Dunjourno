@@ -1,3 +1,0 @@
-/home/max/Projects/AutomataDungeone/CMakeFiles/rebuild_cache.dir
-/home/max/Projects/AutomataDungeone/CMakeFiles/AutomataDungeone.dir
-/home/max/Projects/AutomataDungeone/CMakeFiles/edit_cache.dir

@@ -1,1 +1,0 @@
-/usr/bin/c++     CMakeFiles/AutomataDungeone.dir/main.cpp.o  -o AutomataDungeone -lgd -lgd -lSDL2 -lSDL2_image -lSDL2 -lSDL2_image 

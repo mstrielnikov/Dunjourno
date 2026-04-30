@@ -1,0 +1,14 @@
+# Build sandbox (bootstrapped via `make setup-wasm`)
+.toolchain
+vcpkg
+vcpkg_installed
+emsdk
+python
+raylib-src
+
+# Build artifacts
+bin/
+build/
+build-wasm/
+*.o
+*.tar.gz
