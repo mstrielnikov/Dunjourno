@@ -30,8 +30,9 @@ struct ThermalErosionGenerator {
         int w = (int)grid.width();
         int h = (int)grid.height();
         
-        // Use a temporary height buffer to avoid directional bias
+        // Use temporary buffers to avoid directional bias
         std::vector<float> heights(w * h);
+        std::vector<float> roughness(w * h, 0.0f);
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
                 heights[y * w + x] = grid(x, y).height;
@@ -70,6 +71,10 @@ struct ThermalErosionGenerator {
                         float amount = (max_delta - talus_threshold) * erosion_rate;
                         heights[y * w + x] -= amount;
                         heights[target_y * w + target_x] += amount;
+                        
+                        // Track roughness: eroded cliffs become rougher, settled valleys smoother
+                        roughness[y * w + x] += amount * 10.0f;
+                        roughness[target_y * w + target_x] -= amount * 5.0f;
                     }
                 }
             }
@@ -79,6 +84,7 @@ struct ThermalErosionGenerator {
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
                 grid(x, y).height = heights[y * w + x];
+                grid(x, y).roughness = std::clamp(roughness[y * w + x], 0.0f, 1.0f);
             }
         }
 

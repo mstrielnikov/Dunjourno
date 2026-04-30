@@ -9,25 +9,40 @@
 
 namespace generation {
 
-#include <stb_perlin.h>
-
 namespace noise {
-// Multi-octave fractal noise (fBm) using stb_perlin
-inline float fbm(float x, float y, uint32_t seed, int octaves = 4, float lacunarity = 2.0f, float gain = 0.5f) {
+
+inline float hash1d(uint32_t n) {
+    n = (n << 13U) ^ n;
+    n = n * (n * n * 15731U + 789221U) + 1376312589U;
+    return static_cast<float>(n & 0x7fffffffU) / static_cast<float>(0x7fffffff);
+}
+
+inline float value_noise_1d(float x, uint32_t seed) {
+    float i = std::floor(x);
+    float f = x - i;
+    float u = f * f * (3.0f - 2.0f * f); // Smoothstep
+
+    uint32_t n0 = static_cast<uint32_t>(i) + seed;
+    uint32_t n1 = n0 + 1;
+
+    return hash1d(n0) * (1.0f - u) + hash1d(n1) * u;
+}
+
+// Multi-octave 1D fractal noise (fBm)
+inline float fbm_1d(float x, uint32_t seed, int octaves = 4, float lacunarity = 2.0f, float gain = 0.5f) {
     float sum = 0.0f;
     float amp = 1.0f;
     float freq = 1.0f;
     float max_amp = 0.0f;
     for (int i = 0; i < octaves; ++i) {
-        float n = stb_perlin_noise3_seed(x * freq, y * freq, 0.0f, 0, 0, 0, seed + i * 31);
-        float mapped_n = (n + 1.0f) * 0.5f; 
-        sum += amp * mapped_n;
+        sum += amp * value_noise_1d(x * freq, seed + i * 137);
         max_amp += amp;
         amp *= gain;
         freq *= lacunarity;
     }
     return sum / max_amp;
 }
+
 } // namespace noise
 
 /**
@@ -64,16 +79,16 @@ struct MountainPlacementGenerator {
         std::uniform_int_distribution<int> dist_x(margin, std::max(margin, w - margin - 1));
         std::uniform_int_distribution<int> dist_y(margin, std::max(margin, h - margin - 1));
 
-        struct Center { float x, y; };
+        struct Center { float x, y; uint32_t seed; };
         std::vector<Center> centers;
         centers.reserve(num_mountains);
 
         for (int i = 0; i < num_mountains; ++i) {
-            centers.push_back({ (float)dist_x(rng), (float)dist_y(rng) });
+            centers.push_back({ (float)dist_x(rng), (float)dist_y(rng), static_cast<uint32_t>(rng()) });
         }
 
         // For each cell, check distance to the nearest mountain center
-        // If within base_radius, mark as Mountain and set height by radial falloff
+        // If within perturbed radius, mark as Mountain and set height by radial falloff
         for (auto [x, y, cell] : grid.iter()) {
             float best_falloff = 0.0f;
 
@@ -82,9 +97,16 @@ struct MountainPlacementGenerator {
                 float dy = (float)y - c.y;
                 float dist = std::sqrt(dx * dx + dy * dy);
 
-                if (dist < base_radius) {
-                    // Smooth radial falloff: 1.0 at center, 0.0 at edge
-                    float norm = dist / base_radius;
+                // Perturb radius per-angle to break the perfect circle into craggy lobes
+                float angle = std::atan2(dy, dx);
+                // High-frequency angular noise: ~6 lobes with sub-octave detail
+                float n1 = noise::fbm_1d(angle * 6.0f, c.seed, 4, 2.0f, 0.5f);
+                float n2 = noise::fbm_1d(angle * 12.0f, c.seed + 7777, 2, 2.0f, 0.4f);
+                float angular_noise = n1 * 0.7f + n2 * 0.3f;
+                float perturbed_radius = base_radius * (0.4f + 1.2f * angular_noise);
+
+                if (dist < perturbed_radius) {
+                    float norm = dist / perturbed_radius;
                     float falloff = 0.5f * (1.0f + std::cos(norm * 3.14159265f));
                     best_falloff = std::max(best_falloff, falloff);
                 }
@@ -92,7 +114,6 @@ struct MountainPlacementGenerator {
 
             if (best_falloff > 0.01f) {
                 cell.terrain = TerrainType::Mountain;
-                // Height is the maximum contribution from any mountain center
                 cell.height = std::max(cell.height, best_falloff);
             }
         }
@@ -188,7 +209,7 @@ struct MountainRidgeGenerator {
             float cy = a.y + t * dy;
 
             // Lateral displacement via noise — produces worm-like wander
-            float n = noise::fbm(t * chord_len * noise_frequency, 0.5f, noise_seed, 4);
+            float n = noise::fbm_1d(t * chord_len * noise_frequency, noise_seed, 4);
             float displacement = (n - 0.5f) * 2.0f * noise_amplitude;
 
             cx += perp_x * displacement;
@@ -231,11 +252,23 @@ struct MountainRidgeGenerator {
             float base_falloff = 0.5f * (1.0f + std::cos(norm_d * 3.14159265f));
             float falloff = std::pow(base_falloff, falloff_power);
 
+            // Add position-based hash noise to break uniform radial slopes
+            uint32_t px = static_cast<uint32_t>(x) * 374761393U;
+            uint32_t py = static_cast<uint32_t>(y) * 668265263U;
+            float pos_noise = noise::hash1d(px ^ py ^ noise_seed);
+            falloff *= (0.7f + 0.6f * pos_noise);  // ±30% per-cell variation
+
             // Add per-cell jitter for rough natural edges
             float jitter = jitter_dist(rng);
             falloff = std::clamp(falloff + jitter, 0.0f, 1.0f);
 
             cell.height = peak_height * falloff;
+
+            // Assign roughness proportional to height using position hash
+            uint32_t rx = static_cast<uint32_t>(x) * 374761393U;
+            uint32_t ry = static_cast<uint32_t>(y) * 668265263U;
+            float rng_val = noise::hash1d(rx ^ ry ^ noise_seed);
+            cell.roughness = std::clamp(rng_val * falloff * 1.5f, 0.0f, 1.0f);
         }
 
         std::cout << "  Ridge sculpted: " << mountain_cells.size()
