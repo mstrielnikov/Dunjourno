@@ -16,7 +16,7 @@ RAYLIB_INCLUDE := $(RAYLIB_PATH)/include
 RAYLIB_LIB     := $(RAYLIB_PATH)/lib
 
 # GUI-specific flags
-GUI_FLAGS := -I$(RAYLIB_INCLUDE)
+GUI_FLAGS := -I$(RAYLIB_INCLUDE) -I$(WORKSPACE_ROOT)/raylib-src/examples/core
 
 # Final Library List
 GUI_LIBS  := -L$(RAYLIB_LIB) -lraylib -lglfw3 \

@@ -15,10 +15,11 @@ export EMSDK           := $(EMSDK_DIR)
 # ── Compiler ─────────────────────────────────────
 
 CXX      := em++
-CXXFLAGS := -std=c++23 -Wall -Wextra -Wno-missing-field-initializers -Os \
+CXXFLAGS := -std=c++23 -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter -Os \
             -I$(WORKSPACE_ROOT)/include \
             -I$(WORKSPACE_ROOT)/src \
             -I$(WORKSPACE_ROOT)/raylib-src/src/external \
+            -I$(WORKSPACE_ROOT)/raylib-src/examples/core \
             -DPLATFORM_WEB
 
 # ── Raylib (built from source for PLATFORM_WEB) ──

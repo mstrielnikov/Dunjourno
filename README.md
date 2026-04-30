@@ -32,7 +32,7 @@ Each layer uses specific mathematical models to transform the grid:
 ### Landscape Generation
 
 Uses a radial sine-wave distance field to create organic, island-like or cave-like formations.
-$$\text{height} = \text{clamp}(0.5 + 0.5 \cdot \sin(\text{distance} + \text{frequency}), 0, 1)$$
+$$height = \text{clamp}(0.5 + 0.5 \cdot \sin(\text{distance} + \text{frequency}), 0, 1)$$
 where `distance` is the normalized Euclidean distance from the center of the grid.
 
 ### Mountain Ridge Generation
@@ -54,7 +54,15 @@ This creates a central "spine" of high elevation that tapers off sharply, simula
 ### Forest Masking
 
 Calculates where trees _could_ grow based on elevation. It uses a non-linear decay curve controlled by a steepness parameter.
-$$\text{forest\_mask} = \begin{cases} 0.5 & \text{if } \text{height} > \text{limit} \text{ (Stunted trees)} \\ \text{clamp}(1.0 - (\frac{\text{height}}{\text{limit}})^{\text{steepness}}, 0, 1) & \text{otherwise} \end{cases}$$
+
+$$
+\text{forestmask} =
+\begin{cases}
+    0.5 & \text{if } height > limit \\
+    \text{clamp}(1.0 - (\frac{height}{limit})^{steepness}, 0, 1) & \text{otherwise}
+\end{cases}
+$$
+
 Where:
 
 - `limit`: The height threshold where the primary forest ends.
@@ -62,14 +70,17 @@ Where:
 
 ### Gaussian Seeding
 
-A localized strategy for creating high-density groves at specific coordinates. This layer refines the existing `forest_mask` by multiplying it with a multivariate Gaussian distribution.
-$$\text{total\_weight} = \sum_{s \in seeds} s.amp \cdot \exp\left(-\left(\frac{(x - s.x)^2}{2 \cdot s.sx^2} + \frac{(y - s.y)^2}{2 \cdot s.sy^2}\right)\right)$$
-$$\text{forest\_mask} = \text{clamp}(\text{forest\_mask} \cdot \text{total\_weight}, 0, 1)$$
+A localized strategy for creating high-density groves at specific coordinates. This layer refines the existing `forestmask` by multiplying it with a multivariate Gaussian distribution.
 
-### Forest Placement
+$$\text{weight} = \sum_{s \in seeds} s.amp \cdot \exp\left(-\left(\frac{(x - s.x)^2}{2 \cdot s.sx^2} + \frac{(y - s.y)^2}{2 \cdot s.sy^2}\right)\right)$$
+
+$$\text{forestmask} = \text{clamp}(\text{forestmask} \cdot \text{weight}, 0, 1)$$
+
+### Forest Planting
 
 A stochastic layer that transforms the mask into actual tree placements using a noise-based probability check.
-$$\text{is\_tree} = \text{random}(0, 1) < (\text{forest\_mask} \cdot \text{density})$$
+
+$$\text{istree} = \text{random}(0, 1) < (\text{forestmask} \cdot \text{density})$$
 
 ## Usage
 
