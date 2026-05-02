@@ -36,6 +36,13 @@ static std::vector<CachedTriangle> g_mesh_cache;
 static float g_last_mesh_res = -1.0f;
 static float g_last_time_of_day = -1.0f;
 
+// Off-screen render texture for terrain (draw once, blit every frame)
+static RenderTexture2D g_terrain_rt = {};
+static bool g_terrain_rt_dirty = true;
+static Vector2 g_terrain_offset = {0, 0};  // Translation to place terrain in texture
+static int g_terrain_rt_w = 0;
+static int g_terrain_rt_h = 0;
+
 void RebuildGrid() {
     int new_size = (int)g_config.grid_size;
     auto grid_res = Grid::create(new_size, new_size);
@@ -60,6 +67,7 @@ void RebuildGrid() {
     pipeline.execute(*g_grid);
     g_last_config = g_config;
     g_last_mesh_res = -1.0f; // Force cache rebuild
+    g_terrain_rt_dirty = true;
 }
 
 Vector2 ProjectIso(float x, float y, float height);
@@ -165,6 +173,56 @@ void RebuildMeshCache() {
     
     g_last_mesh_res = g_config.mesh_resolution;
     g_last_time_of_day = g_config.time_of_day;
+    g_terrain_rt_dirty = true;
+}
+
+void RebuildTerrainTexture() {
+    // Compute bounding box of all cached triangles
+    float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
+    for (const auto& tri : g_mesh_cache) {
+        for (int i = 0; i < 3; ++i) {
+            minX = std::min(minX, tri.p[i].x);
+            minY = std::min(minY, tri.p[i].y);
+            maxX = std::max(maxX, tri.p[i].x);
+            maxY = std::max(maxY, tri.p[i].y);
+        }
+    }
+
+    // Add margin
+    float margin = 16.0f;
+    minX -= margin; minY -= margin;
+    maxX += margin; maxY += margin;
+
+    int rt_w = (int)(maxX - minX);
+    int rt_h = (int)(maxY - minY);
+
+    // Clamp to reasonable size for WASM
+    rt_w = std::clamp(rt_w, 64, 8192);
+    rt_h = std::clamp(rt_h, 64, 8192);
+
+    // Recreate texture if size changed
+    if (rt_w != g_terrain_rt_w || rt_h != g_terrain_rt_h) {
+        if (g_terrain_rt.id > 0) UnloadRenderTexture(g_terrain_rt);
+        g_terrain_rt = LoadRenderTexture(rt_w, rt_h);
+        g_terrain_rt_w = rt_w;
+        g_terrain_rt_h = rt_h;
+    }
+
+    g_terrain_offset = { minX, minY };
+
+    // Render all triangles into the texture (one-time cost)
+    BeginTextureMode(g_terrain_rt);
+        ClearBackground(BLANK);
+        // Offset so terrain fits at (0,0) in the texture
+        for (const auto& tri : g_mesh_cache) {
+            Vector2 a = { tri.p[0].x - minX, tri.p[0].y - minY };
+            Vector2 b = { tri.p[1].x - minX, tri.p[1].y - minY };
+            Vector2 c = { tri.p[2].x - minX, tri.p[2].y - minY };
+            DrawTriangle(a, b, c, tri.c);
+        }
+    EndTextureMode();
+
+    g_terrain_rt_dirty = false;
 }
 
 Vector2 ProjectIso(float x, float y, float height) {
@@ -197,17 +255,25 @@ void UpdateDrawFrame() {
     }
     g_camera.zoom = std::clamp(g_camera.zoom + GetMouseWheelMove() * 0.05f, 0.1f, 3.0f);
 
+    // Rebuild mesh cache if needed (only when params change)
+    if (g_config.mesh_resolution != g_last_mesh_res || g_config.time_of_day != g_last_time_of_day) {
+        RebuildMeshCache();
+    }
+
+    // Render terrain to off-screen texture if dirty (one-time cost)
+    if (g_terrain_rt_dirty && !g_mesh_cache.empty()) {
+        RebuildTerrainTexture();
+    }
+
     BeginDrawing();
         ClearBackground({ 30, 30, 35, 255 });
         
         BeginMode2D(g_camera);
-            // Continuous mesh drawing using the cache
-            if (g_config.mesh_resolution != g_last_mesh_res || g_config.time_of_day != g_last_time_of_day) {
-                RebuildMeshCache();
-            }
-
-            for (const auto& tri : g_mesh_cache) {
-                DrawTriangle(tri.p[0], tri.p[1], tri.p[2], tri.c);
+            // Draw the pre-rendered terrain texture (1 draw call!)
+            if (g_terrain_rt.id > 0) {
+                Rectangle src = { 0, 0, (float)g_terrain_rt_w, -(float)g_terrain_rt_h };
+                Rectangle dst = { g_terrain_offset.x, g_terrain_offset.y, (float)g_terrain_rt_w, (float)g_terrain_rt_h };
+                DrawTexturePro(g_terrain_rt.texture, src, dst, {0, 0}, 0.0f, WHITE);
             }
         EndMode2D();
 
