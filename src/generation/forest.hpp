@@ -17,9 +17,9 @@ struct ForestMaskGenerator {
     std::expected<void, GenError> apply(Grid& grid) {
         std::cout << "[WORK] ForestMaskGeneratorSteep calculating fertile areas...\n";
         for (auto [x, y, cell] : grid.iter()) {
-            // No trees on mountains
+            // Mountains: rare anomaly trees at low altitude edges
             if (cell.terrain == TerrainType::Mountain) {
-                cell.forest_mask = 0.0f;
+                cell.forest_mask = 0.05f;  // 5% anomaly rate — stunted alpine trees
                 continue;
             }
 

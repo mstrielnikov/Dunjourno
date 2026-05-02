@@ -9,10 +9,7 @@
 #   make clean      Remove build artifacts
 #   make setup-wasm Bootstrap EMSDK + Python sandbox
 
-all: cli gui
-
-cli:
-	$(MAKE) -C apps/cli
+all: gui
 
 gui:
 	$(MAKE) -C apps/gui
@@ -47,7 +44,6 @@ setup-wasm:
 # ── Clean ────────────────────────────────────────
 
 clean:
-	$(MAKE) -C apps/cli clean
 	$(MAKE) -C apps/gui clean
 	$(MAKE) -C apps/wasm clean 2>/dev/null || true
 	rm -rf bin build
@@ -55,4 +51,4 @@ clean:
 clean-all: clean
 	$(MAKE) -C apps/wasm clean-all 2>/dev/null || true
 
-.PHONY: all cli gui wasm run serve setup-wasm clean clean-all
+.PHONY: all gui wasm run serve setup-wasm clean clean-all
