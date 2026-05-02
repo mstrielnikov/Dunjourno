@@ -40,6 +40,9 @@ static float g_last_time_of_day = -1.0f;
 static RenderTexture2D g_terrain_rt = {};
 static bool g_terrain_rt_dirty = true;
 static Vector2 g_terrain_offset = {0, 0};  // Translation to place terrain in texture
+static float g_terrain_world_w = 0.0f;     // Original world width
+static float g_terrain_world_h = 0.0f;     // Original world height
+static float g_terrain_render_scale = 1.0f; // Downscaling factor for huge maps
 static int g_terrain_rt_w = 0;
 static int g_terrain_rt_h = 0;
 
@@ -193,12 +196,18 @@ void RebuildTerrainTexture() {
     minX -= margin; minY -= margin;
     maxX += margin; maxY += margin;
 
-    int rt_w = (int)(maxX - minX);
-    int rt_h = (int)(maxY - minY);
+    float real_w = maxX - minX;
+    float real_h = maxY - minY;
+    
+    // Scale-aware RTT: Downscale if terrain exceeds texture limits (8k)
+    // Most GPUs/WebGL2 support 8k. 16k is risky and uses 512MB+ VRAM.
+    const float MAX_RT_SIZE = 8192.0f; 
+    g_terrain_render_scale = 1.0f;
+    if (real_w > MAX_RT_SIZE) g_terrain_render_scale = std::min(g_terrain_render_scale, MAX_RT_SIZE / real_w);
+    if (real_h > MAX_RT_SIZE) g_terrain_render_scale = std::min(g_terrain_render_scale, MAX_RT_SIZE / real_h);
 
-    // Clamp to reasonable size for WASM
-    rt_w = std::clamp(rt_w, 64, 8192);
-    rt_h = std::clamp(rt_h, 64, 8192);
+    int rt_w = (int)(real_w * g_terrain_render_scale);
+    int rt_h = (int)(real_h * g_terrain_render_scale);
 
     // Recreate texture if size changed
     if (rt_w != g_terrain_rt_w || rt_h != g_terrain_rt_h) {
@@ -209,15 +218,17 @@ void RebuildTerrainTexture() {
     }
 
     g_terrain_offset = { minX, minY };
+    g_terrain_world_w = real_w;
+    g_terrain_world_h = real_h;
 
     // Render all triangles into the texture (one-time cost)
     BeginTextureMode(g_terrain_rt);
         ClearBackground(BLANK);
-        // Offset so terrain fits at (0,0) in the texture
+        // Apply scaling so huge maps fit in the texture
         for (const auto& tri : g_mesh_cache) {
-            Vector2 a = { tri.p[0].x - minX, tri.p[0].y - minY };
-            Vector2 b = { tri.p[1].x - minX, tri.p[1].y - minY };
-            Vector2 c = { tri.p[2].x - minX, tri.p[2].y - minY };
+            Vector2 a = { (tri.p[0].x - minX) * g_terrain_render_scale, (tri.p[0].y - minY) * g_terrain_render_scale };
+            Vector2 b = { (tri.p[1].x - minX) * g_terrain_render_scale, (tri.p[1].y - minY) * g_terrain_render_scale };
+            Vector2 c = { (tri.p[2].x - minX) * g_terrain_render_scale, (tri.p[2].y - minY) * g_terrain_render_scale };
             DrawTriangle(a, b, c, tri.c);
         }
     EndTextureMode();
@@ -271,8 +282,9 @@ void UpdateDrawFrame() {
         BeginMode2D(g_camera);
             // Draw the pre-rendered terrain texture (1 draw call!)
             if (g_terrain_rt.id > 0) {
+                // Upsample the texture back to world size if it was downscaled
                 Rectangle src = { 0, 0, (float)g_terrain_rt_w, -(float)g_terrain_rt_h };
-                Rectangle dst = { g_terrain_offset.x, g_terrain_offset.y, (float)g_terrain_rt_w, (float)g_terrain_rt_h };
+                Rectangle dst = { g_terrain_offset.x, g_terrain_offset.y, g_terrain_world_w, g_terrain_world_h };
                 DrawTexturePro(g_terrain_rt.texture, src, dst, {0, 0}, 0.0f, WHITE);
             }
         EndMode2D();

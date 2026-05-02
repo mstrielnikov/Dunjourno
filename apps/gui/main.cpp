@@ -37,6 +37,9 @@ static float g_last_time_of_day = -1.0f;
 static RenderTexture2D g_terrain_rt = {};
 static bool g_terrain_rt_dirty = true;
 static Vector2 g_terrain_offset = {0, 0};
+static float g_terrain_world_w = 0.0f;
+static float g_terrain_world_h = 0.0f;
+static float g_terrain_render_scale = 1.0f;
 static int g_terrain_rt_w = 0;
 static int g_terrain_rt_h = 0;
 
@@ -189,8 +192,16 @@ void RebuildTerrainTexture() {
     minX -= margin; minY -= margin;
     maxX += margin; maxY += margin;
 
-    int rt_w = std::clamp((int)(maxX - minX), 64, 8192);
-    int rt_h = std::clamp((int)(maxY - minY), 64, 8192);
+    float real_w = maxX - minX;
+    float real_h = maxY - minY;
+
+    const float MAX_RT_SIZE = 8192.0f; 
+    g_terrain_render_scale = 1.0f;
+    if (real_w > MAX_RT_SIZE) g_terrain_render_scale = std::min(g_terrain_render_scale, MAX_RT_SIZE / real_w);
+    if (real_h > MAX_RT_SIZE) g_terrain_render_scale = std::min(g_terrain_render_scale, MAX_RT_SIZE / real_h);
+
+    int rt_w = (int)(real_w * g_terrain_render_scale);
+    int rt_h = (int)(real_h * g_terrain_render_scale);
 
     if (rt_w != g_terrain_rt_w || rt_h != g_terrain_rt_h) {
         if (g_terrain_rt.id > 0) UnloadRenderTexture(g_terrain_rt);
@@ -200,13 +211,15 @@ void RebuildTerrainTexture() {
     }
 
     g_terrain_offset = { minX, minY };
+    g_terrain_world_w = real_w;
+    g_terrain_world_h = real_h;
 
     BeginTextureMode(g_terrain_rt);
         ClearBackground(BLANK);
         for (const auto& tri : g_mesh_cache) {
-            Vector2 a = { tri.p[0].x - minX, tri.p[0].y - minY };
-            Vector2 b = { tri.p[1].x - minX, tri.p[1].y - minY };
-            Vector2 c = { tri.p[2].x - minX, tri.p[2].y - minY };
+            Vector2 a = { (tri.p[0].x - minX) * g_terrain_render_scale, (tri.p[0].y - minY) * g_terrain_render_scale };
+            Vector2 b = { (tri.p[1].x - minX) * g_terrain_render_scale, (tri.p[1].y - minY) * g_terrain_render_scale };
+            Vector2 c = { (tri.p[2].x - minX) * g_terrain_render_scale, (tri.p[2].y - minY) * g_terrain_render_scale };
             DrawTriangle(a, b, c, tri.c);
         }
     EndTextureMode();
@@ -273,7 +286,7 @@ int main() {
             BeginMode2D(camera);
                 if (g_terrain_rt.id > 0) {
                     Rectangle src = { 0, 0, (float)g_terrain_rt_w, -(float)g_terrain_rt_h };
-                    Rectangle dst = { g_terrain_offset.x, g_terrain_offset.y, (float)g_terrain_rt_w, (float)g_terrain_rt_h };
+                    Rectangle dst = { g_terrain_offset.x, g_terrain_offset.y, g_terrain_world_w, g_terrain_world_h };
                     DrawTexturePro(g_terrain_rt.texture, src, dst, {0, 0}, 0.0f, WHITE);
                 }
             EndMode2D();
