@@ -47,7 +47,6 @@ void RebuildGrid() {
     g_grid_view = g_grid->view();
 
     HybridTerrainGenerator hybrid;
-    hybrid.num_mountains = (int)g_config.num_mountains;
     hybrid.terrain_coverage = g_config.terrain_coverage;
     hybrid.peak_height = g_config.peak_height;
     hybrid.num_droplets = (int)(g_config.erosion_drops * 1000.0f);
@@ -237,10 +236,6 @@ void UpdateDrawFrame() {
         GuiSliderBar({ (float)panelX + 100, (float)currY - 5, 160, 25 }, "", TextFormat("%.0f", g_config.grid_size), &g_config.grid_size, 32.0f, 256.0f);
 
         currY += 35;
-        DrawText("Mnt Count", panelX + 15, currY, 16, RAYWHITE);
-        GuiSliderBar({ (float)panelX + 100, (float)currY - 5, 160, 25 }, "", TextFormat("%.0f", g_config.num_mountains), &g_config.num_mountains, 1.0f, 10.0f);
-
-        currY += 35;
         DrawText("Coverage", panelX + 15, currY, 16, RAYWHITE);
         GuiSliderBar({ (float)panelX + 100, (float)currY - 5, 160, 25 }, "", TextFormat("%.0f%%", g_config.terrain_coverage * 100.0f), &g_config.terrain_coverage, 0.05f, 1.0f);
 
@@ -264,7 +259,6 @@ void UpdateDrawFrame() {
         if (GuiButton({ (float)panelX + 15, (float)currY, 245, 25 }, "Generate Terrain") ||
            (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && 
             (g_config.grid_size != g_last_config.grid_size ||
-             g_config.num_mountains != g_last_config.num_mountains ||
              g_config.terrain_coverage != g_last_config.terrain_coverage ||
              g_config.peak_height != g_last_config.peak_height ||
              g_config.erosion_drops != g_last_config.erosion_drops ||

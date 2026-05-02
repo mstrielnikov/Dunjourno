@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <random>
 #include <vector>
+#include <numeric>
 
 #include "mountain.hpp"
 
@@ -13,25 +14,27 @@ namespace generation {
 /**
  * @brief Hybrid Terrain Generator
  *
- * Combines explicit mountain pool placement with Newtonian hydraulic erosion:
- *   Phase 1: Place N elliptical mountain pools, sized by terrain coverage %
- *   Phase 2: Generate fBm heightmap only inside pools (cosine-blended edges)
- *   Phase 3: Run hydraulic erosion droplets within pool boundaries
- *   Phase 4: Classify terrain — outside pools = flat Grass (walkable)
+ * Uses noise-based coverage allocation for natural mountain formation:
+ *   Phase 1: Generate a 2D noise mask and threshold it to allocate exactly
+ *            coverage% of the map as mountain terrain in organic random shapes
+ *   Phase 2: Generate fBm heightmap only inside the masked region
+ *   Phase 3: Run hydraulic erosion droplets within the mask boundary
+ *   Phase 4: Classify terrain — outside mask = flat Grass (walkable)
  *
- * Designed for tabletop RPG use: flat terrain between mountains remains
- * perfectly walkable for future procedural cities, roads, and grid play.
+ * The noise mask produces irregular, continent-like mountain regions
+ * without explicit ellipse placement, giving photorealistic terrain shapes.
+ * Flat terrain between mountains remains walkable for procedural cities,
+ * roads, and grid-based RPG/D&D table play.
  */
 struct HybridTerrainGenerator {
-    // Pool placement
-    int   num_mountains     = 3;       // Number of mountain pools
-    float terrain_coverage  = 0.25f;   // Fraction of grid area allocated to mountains
+    // Coverage
+    float terrain_coverage  = 0.25f;   // Fraction of grid allocated to mountains (0.0–1.0)
 
     // Heightmap
     float peak_height       = 3.0f;    // Maximum terrain height
     int   noise_octaves     = 6;       // fBm octaves
 
-    // Erosion (Newtonian droplet model from SimpleErosion)
+    // Erosion (Newtonian droplet model)
     int   num_droplets      = 70000;
     float dt                = 1.2f;
     float friction          = 0.05f;
@@ -47,150 +50,105 @@ struct HybridTerrainGenerator {
         std::cout << "[INIT] HybridTerrainGenerator seed=" << seed << "\n";
     }
 
-    // ── Pool definition ──────────────────────────────────────────────
-    struct Pool {
-        float cx, cy;          // Center
-        float rx, ry;          // Semi-axes
-        float cos_a, sin_a;    // Rotation
-        uint32_t seed;         // Per-pool noise seed
-
-        // Normalized elliptical distance (0 at center, 1 at boundary)
-        float distance(float x, float y) const {
-            float dx = x - cx;
-            float dy = y - cy;
-            float lx = dx * cos_a + dy * sin_a;
-            float ly = -dx * sin_a + dy * cos_a;
-            return std::sqrt((lx * lx) / (rx * rx) + (ly * ly) / (ry * ry));
-        }
-
-        bool contains(float x, float y) const {
-            return distance(x, y) < 1.0f;
-        }
-    };
-
     std::expected<void, GenError> apply(Grid& grid) {
         int w = (int)grid.width();
         int h = (int)grid.height();
+        int total_cells = w * h;
         std::cout << "[WORK] HybridTerrainGenerator on " << w << "x" << h << " grid\n";
 
-        std::mt19937 rng(seed);
-
         // ═══════════════════════════════════════════════════════════════
-        // Phase 1: Place mountain pools
+        // Phase 1: Noise-based coverage mask
         // ═══════════════════════════════════════════════════════════════
-        std::cout << "  Phase 1: Placing " << num_mountains << " mountain pools ("
-                  << (int)(terrain_coverage * 100) << "% coverage)...\n";
+        int target_cells = (int)(total_cells * std::clamp(terrain_coverage, 0.0f, 1.0f));
+        std::cout << "  Phase 1: Allocating " << target_cells << "/" << total_cells
+                  << " cells (" << (int)(terrain_coverage * 100) << "% coverage)...\n";
 
-        float grid_area = (float)(w * h);
-        float total_pool_area = grid_area * terrain_coverage;
-        float area_per_pool = total_pool_area / (float)num_mountains;
+        // Generate a low-frequency noise field for the mask shape
+        // Use a different seed offset so the mask shape differs from heightmap detail
+        uint32_t mask_seed = seed + 99991;
+        float mask_scale = 0.015f;  // Low frequency → large, continent-like regions
 
-        // r from A = pi * r^2  →  r = sqrt(A / pi)
-        float base_r = std::sqrt(area_per_pool / 3.14159265f);
-
-        std::uniform_real_distribution<float> axis_ratio(0.6f, 1.4f);
-        std::uniform_real_distribution<float> angle_dist(0.0f, 3.14159265f);
-
-        // Place pools with margin and separation
-        std::vector<Pool> pools;
-        pools.reserve(num_mountains);
-
-        float margin = base_r * 0.3f;
-        std::uniform_real_distribution<float> pos_x(margin + base_r, (float)w - margin - base_r);
-        std::uniform_real_distribution<float> pos_y(margin + base_r, (float)h - margin - base_r);
-
-        int max_attempts = num_mountains * 50;
-        for (int i = 0; i < num_mountains && max_attempts > 0; ++i) {
-            for (int attempt = 0; attempt < 50; ++attempt, --max_attempts) {
-                float cx = pos_x(rng);
-                float cy = pos_y(rng);
-
-                // Check separation from existing pools
-                bool too_close = false;
-                for (const auto& p : pools) {
-                    float dist = std::sqrt((cx - p.cx) * (cx - p.cx) + (cy - p.cy) * (cy - p.cy));
-                    if (dist < base_r * 0.5f) { too_close = true; break; }
-                }
-                if (too_close) continue;
-
-                float k = axis_ratio(rng);
-                float a = angle_dist(rng);
-                pools.push_back({
-                    cx, cy,
-                    base_r * k, base_r / k,
-                    std::cos(a), std::sin(a),
-                    seed + (uint32_t)i * 7919
-                });
-                break;
+        std::vector<float> mask_noise(total_cells);
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                mask_noise[y * w + x] = noise::fbm_2d(
+                    (float)x * mask_scale, (float)y * mask_scale,
+                    mask_seed, 4, 2.0f, 0.5f
+                );
             }
         }
 
-        std::cout << "  Placed " << pools.size() << " pools (base_r=" << base_r << ")\n";
+        // Find the threshold that gives exactly target_cells above it
+        // Sort noise values and pick the (total - target)-th value as threshold
+        std::vector<float> sorted_noise(mask_noise);
+        std::sort(sorted_noise.begin(), sorted_noise.end());
+
+        float threshold = 0.0f;
+        if (target_cells <= 0) {
+            threshold = sorted_noise.back() + 1.0f;  // Nothing passes
+        } else if (target_cells >= total_cells) {
+            threshold = sorted_noise.front() - 1.0f;  // Everything passes
+        } else {
+            // We want the top `target_cells` values → threshold at index (total - target)
+            threshold = sorted_noise[total_cells - target_cells];
+        }
+
+        std::vector<bool> pool_mask(total_cells, false);
+        for (int i = 0; i < total_cells; ++i) {
+            pool_mask[i] = (mask_noise[i] >= threshold);
+        }
 
         // ═══════════════════════════════════════════════════════════════
-        // Phase 2: Generate fBm heightmap within pools
+        // Phase 2: Generate fBm heightmap within mask
         // ═══════════════════════════════════════════════════════════════
-        std::cout << "  Phase 2: Generating heightmap within pools...\n";
+        std::cout << "  Phase 2: Generating heightmap within coverage mask...\n";
 
-        std::vector<float> heightmap(w * h, 0.0f);
-        // Pool membership mask (used to constrain erosion)
-        std::vector<bool> pool_mask(w * h, false);
+        std::vector<float> heightmap(total_cells, 0.0f);
 
-        // Auto-compute noise scale from pool radius (larger pools = larger features)
-        float noise_scale = 2.0f / base_r;
+        // Auto-compute noise scale from coverage (more coverage = need larger features)
+        float effective_radius = std::sqrt((float)target_cells / 3.14159265f);
+        float height_scale = 2.0f / std::max(effective_radius, 1.0f);
 
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
-                float best_height = 0.0f;
-                bool in_pool = false;
+                if (!pool_mask[y * w + x]) continue;
 
-                for (const auto& pool : pools) {
-                    float d = pool.distance((float)x, (float)y);
-                    if (d >= 1.0f) continue;
+                float nx = (float)x * height_scale;
+                float ny = (float)y * height_scale;
+                float val = noise::fbm_2d(nx, ny, seed, noise_octaves, 2.0f, 0.5f);
 
-                    in_pool = true;
+                val = std::clamp(val * 1.3f - 0.15f, 0.0f, 1.0f);
 
-                    // fBm noise at this position (using pool-specific seed)
-                    float nx = (float)x * noise_scale;
-                    float ny = (float)y * noise_scale;
-                    float val = noise::fbm_2d(nx, ny, pool.seed, noise_octaves, 2.0f, 0.5f);
+                // Smooth blend at mask edges: check distance to nearest non-mask cell
+                // Approximate by checking how deep inside the mask we are via the
+                // noise value relative to threshold (higher noise = deeper inside)
+                float depth = (mask_noise[y * w + x] - threshold);
+                float blend_range = 0.05f;  // Noise units for edge blend
+                float blend = std::clamp(depth / blend_range, 0.0f, 1.0f);
 
-                    // Remap to [0, 1]
-                    val = std::clamp(val * 1.3f - 0.15f, 0.0f, 1.0f);
-
-                    // Cosine blend at pool edge: smooth falloff from d=0.7 to d=1.0
-                    float blend = 1.0f;
-                    if (d > 0.7f) {
-                        blend = 0.5f * (1.0f + std::cos((d - 0.7f) / 0.3f * 3.14159265f));
-                    }
-
-                    float h_val = val * peak_height * blend;
-                    best_height = std::max(best_height, h_val);
-                }
-
-                heightmap[y * w + x] = best_height;
-                pool_mask[y * w + x] = in_pool;
+                heightmap[y * w + x] = val * peak_height * blend;
             }
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // Phase 3: Hydraulic erosion within pools
+        // Phase 3: Hydraulic erosion within mask
         // ═══════════════════════════════════════════════════════════════
-        std::cout << "  Phase 3: Simulating " << num_droplets << " water droplets within pools...\n";
+        std::cout << "  Phase 3: Simulating " << num_droplets << " water droplets within mask...\n";
 
-        std::vector<float> erosion_map(w * h, 0.0f);
+        std::vector<float> erosion_map(total_cells, 0.0f);
 
-        // Build list of pool cells for droplet spawning
-        std::vector<std::pair<int, int>> pool_cells;
-        for (int y = 0; y < h; ++y)
-            for (int x = 0; x < w; ++x)
-                if (pool_mask[y * w + x])
-                    pool_cells.push_back({x, y});
+        // Build list of mask cells for droplet spawning
+        std::vector<int> mask_indices;
+        mask_indices.reserve(target_cells);
+        for (int i = 0; i < total_cells; ++i) {
+            if (pool_mask[i]) mask_indices.push_back(i);
+        }
 
-        if (pool_cells.empty()) {
-            std::cout << "  No pool cells — skipping erosion.\n";
+        if (mask_indices.empty()) {
+            std::cout << "  No mask cells — skipping erosion.\n";
         } else {
-            std::uniform_int_distribution<int> cell_dist(0, (int)pool_cells.size() - 1);
+            std::mt19937 rng(seed + 1);
+            std::uniform_int_distribution<int> cell_dist(0, (int)mask_indices.size() - 1);
 
             auto surface_normal = [&](int x, int y) -> std::tuple<float, float, float> {
                 float hL = heightmap[y * w + std::max(x - 1, 0)];
@@ -212,10 +170,9 @@ struct HybridTerrainGenerator {
             };
 
             for (int drop = 0; drop < num_droplets; ++drop) {
-                // Spawn only within pool cells
-                auto [start_x, start_y] = pool_cells[cell_dist(rng)];
-                float px = (float)start_x;
-                float py = (float)start_y;
+                int idx = mask_indices[cell_dist(rng)];
+                float px = (float)(idx % w);
+                float py = (float)(idx / w);
                 float sx = 0.0f, sy = 0.0f;
                 float volume = 1.0f;
                 float sediment = 0.0f;
@@ -236,13 +193,12 @@ struct HybridTerrainGenerator {
                     sx *= (1.0f - dt * friction);
                     sy *= (1.0f - dt * friction);
 
-                    // Kill droplet if it leaves the grid or exits a pool
                     if (px < 0 || px >= w || py < 0 || py >= h) break;
 
                     int new_ix = std::clamp((int)px, 0, w - 1);
                     int new_iy = std::clamp((int)py, 0, h - 1);
 
-                    if (!pool_mask[new_iy * w + new_ix]) break;  // Left pool → die
+                    if (!pool_mask[new_iy * w + new_ix]) break;  // Left mask → die
 
                     float speed = std::sqrt(sx * sx + sy * sy);
                     float h_diff = heightmap[iy * w + ix] - heightmap[new_iy * w + new_ix];

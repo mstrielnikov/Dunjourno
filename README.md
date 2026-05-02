@@ -30,29 +30,44 @@ The `Pipeline` is a variadic template that composes multiple layers. It uses C++
 The terrain is generated through a multi-stage pipeline executed in order:
 
 ```
-HydraulicTerrain → ForestMask → ForestPlacement → TerrainTexture
+HybridTerrain → ForestMask → ForestPlacement → TerrainTexture
 ```
 
-### 1. Hydraulic Terrain Generation
+### 1. Hybrid Terrain Generation
 
-A single physically-based layer that replaces explicit mountain placement with emergent topography. The implementation follows the Newtonian droplet model from [SimpleErosion](https://github.com/weigert/SimpleErosion).
+A coverage-controlled terrain layer that combines a **noise-based allocation mask** with **Newtonian hydraulic erosion**. Mountain regions emerge in organic, random shapes determined by the coverage percentage, while remaining terrain stays flat and walkable — designed for procedural cities, roads, and grid-based tabletop RPG play.
 
-#### Phase 1 — Initial Heightmap
+The implementation follows the Newtonian droplet model from [SimpleErosion](https://github.com/weigert/SimpleErosion).
 
-A 2D heightmap is generated using multi-octave fractal Brownian motion (`fbm_2d`) built from a custom hash-based value noise function (zero external dependencies):
+#### Phase 1 — Noise-Based Coverage Mask
 
-$$h(x, y) = H_{peak} \cdot \text{clamp}\left(\text{fbm}_2(x \cdot s, y \cdot s) \cdot 1.3 - 0.3, \, 0, \, 1\right)$$
+A low-frequency 2D noise field determines which parts of the map become mountainous. The mask uses 4-octave `fbm_2d` at a coarse scale ($s_{mask} = 0.015$) to produce large, continent-like regions:
 
-where $s$ is the noise scale (controls feature size) and $H_{peak}$ is the maximum height. The `fbm_2d` function uses 6 octaves with lacunarity 2.0 and gain 0.5. The value noise is built on a 2D lattice with smoothstep interpolation:
+$$m(x, y) = \text{fbm}_2(x \cdot s_{mask}, y \cdot s_{mask})$$
 
-$$\text{value}(x, y) = \text{bilerp}(\text{hash}(x_0, y_0), \text{hash}(x_1, y_0), \text{hash}(x_0, y_1), \text{hash}(x_1, y_1), u, v)$$
+To allocate exactly the desired **coverage percentage** of cells, all noise values are sorted and a threshold $\tau$ is selected such that:
 
-where $u, v$ are smoothstep-filtered fractional coordinates and `hash` is a fast integer hash function.
+$$\tau = \text{sorted}[N_{total} - N_{target}], \quad N_{target} = N_{total} \cdot \text{coverage}$$
 
-#### Phase 2 — Newtonian Droplet Erosion
+Cells where $m(x, y) \geq \tau$ become the **mountain pool**. This produces irregular, natural-looking boundaries without explicit ellipse or circle placement. At 100% coverage the entire map is mountainous; at 25% roughly a quarter gets allocated in random organic patches.
 
-Water droplets are spawned at random grid positions and simulated with Newtonian physics. Each droplet has:
-- **Position** $(p_x, p_y)$ — fractional grid coordinates
+#### Phase 2 — Heightmap Within Coverage Mask
+
+A 6-octave fBm heightmap is generated **only inside the mask** using a hash-based value noise function (zero dependencies):
+
+$$h(x, y) = H_{peak} \cdot \text{clamp}\left(\text{fbm}_2(x \cdot s, y \cdot s) \cdot 1.3 - 0.15, \, 0, \, 1\right) \cdot \beta(x, y)$$
+
+where the **edge blend** $\beta$ provides a smooth cosine transition at pool boundaries based on the noise depth above the threshold:
+
+$$\beta = \text{clamp}\left(\frac{m(x, y) - \tau}{\Delta_{blend}}, \, 0, \, 1\right), \quad \Delta_{blend} = 0.05$$
+
+The noise scale $s$ is auto-computed from the effective pool radius ($r_{eff} = \sqrt{N_{target} / \pi}$) so feature size adapts to coverage area. All cells outside the mask remain at height 0.
+
+#### Phase 3 — Newtonian Droplet Erosion
+
+Water droplets spawn **only within mask cells** and are simulated with Newtonian physics. Each droplet has:
+
+- **Position** $(p_x, p_y)$ — grid coordinates
 - **Velocity** $(s_x, s_y)$ — 2D speed vector
 - **Volume** $V$ — water quantity, decreasing via evaporation
 - **Sediment** $S$ — carried material
@@ -80,26 +95,28 @@ $$h(p) \mathrel{-}= \Delta t \cdot V \cdot D \cdot (C_{max} - S)$$
 
 When $C_{max} > S$, the droplet erodes (picks up sediment). When $C_{max} < S$, it deposits. This unified approach produces smoother sediment redistribution than separate erosion/deposition branches.
 
-**4. Evaporation.** Volume decreases each step:
+**4. Boundary kill.** Droplets that leave the coverage mask are immediately killed, preventing erosion from spilling into flat terrain.
+
+**5. Evaporation.** Volume decreases each step:
 
 $$V \mathrel{\times}= (1 - \Delta t \cdot e)$$
 
-The droplet dies when $V < V_{min}$ (default 0.01) or leaves the grid.
+The droplet dies when $V < V_{min}$ (default 0.01) or leaves the mask.
 
 **Default parameters** (tuned from SimpleErosion):
 
-| Parameter       | Default | Description                              |
-| --------------- | ------- | ---------------------------------------- |
-| `dt`            | 1.2     | Integration timestep                     |
-| `friction`      | 0.05    | Speed loss factor per step               |
-| `density`       | 1.0     | Droplet density (mass = V × ρ)           |
-| `depositionRate`| 0.1     | Rate of approach to equilibrium sediment |
-| `evaporationRate`| 0.01   | Volume loss per step                     |
-| `minVolume`     | 0.01    | Volume below which droplet dies          |
+| Parameter         | Default | Description                              |
+| ----------------- | ------- | ---------------------------------------- |
+| `dt`              | 1.2     | Integration timestep                     |
+| `friction`        | 0.05    | Speed loss factor per step               |
+| `density`         | 1.0     | Droplet density (mass = V × ρ)           |
+| `depositionRate`  | 0.1     | Rate of approach to equilibrium sediment |
+| `evaporationRate` | 0.01    | Volume loss per step                     |
+| `minVolume`       | 0.01    | Volume below which droplet dies          |
 
-#### Phase 3 — Terrain Classification
+#### Phase 4 — Terrain Classification
 
-After erosion, cells are classified as `Mountain` (height > threshold) or `Grass`. Roughness is derived from cumulative erosion activity at each cell, normalized and scaled by elevation.
+Cells within the mask with height > 0.1 are classified as `Mountain`; everything else is `Grass`. Roughness is derived from cumulative erosion activity at each cell, normalized and scaled by elevation. Flat terrain outside the coverage mask has zero height and zero roughness.
 
 ### 2. Forest Mask & Placement
 
@@ -113,15 +130,15 @@ The `ForestPlacementGenerator` then stochastically places trees where `random() 
 
 The `TerrainTextureGenerator` uses **relative height thresholds** (computed from the actual max height) so coloring adapts to any terrain configuration:
 
-| Condition                                       | Colour         | RGB               |
-| ----------------------------------------------- | -------------- | ----------------- |
-| **Mountain** — flat, $h_{rel} > 0.75$           | Snow           | `(240, 240, 250)` |
-| **Mountain** — steep slope                      | Grey rock      | `(80–130, grey)`  |
-| **Mountain** — flat, $h_{rel} > 0.4$            | Brown rock     | `(110, 95, 75)`   |
-| **Mountain** — flat, low altitude               | Highland grass | `(90, 130, 80)`   |
-| **Tree**                                        | Dark green     | `(30, 100, 30)`   |
-| **Grass** — steep ($\text{steepness} > 0.08$)   | Dirt           | `(139, 115, 85)`  |
-| **Grass** — flat                                | Green          | `(60, 140, 60)`   |
+| Condition                                     | Colour         | RGB               |
+| --------------------------------------------- | -------------- | ----------------- |
+| **Mountain** — flat, $h_{rel} > 0.75$         | Snow           | `(240, 240, 250)` |
+| **Mountain** — steep slope                    | Grey rock      | `(80–130, grey)`  |
+| **Mountain** — flat, $h_{rel} > 0.4$          | Brown rock     | `(110, 95, 75)`   |
+| **Mountain** — flat, low altitude             | Highland grass | `(90, 130, 80)`   |
+| **Tree**                                      | Dark green     | `(30, 100, 30)`   |
+| **Grass** — steep ($\text{steepness} > 0.08$) | Dirt           | `(139, 115, 85)`  |
+| **Grass** — flat                              | Green          | `(60, 140, 60)`   |
 
 Steepness is computed per-cell using central differences. Grey rock colour is **altitude-dependent** — darker at lower elevations, lighter near peaks.
 
@@ -192,7 +209,7 @@ make serve # Starts a local server on port 8080 to host the Wasm build
 
 ```cpp
 auto pipeline = Pipeline(
-    HydraulicTerrainGenerator{},                            // fBm heightmap + droplet erosion
+    HybridTerrainGenerator{},                               // Coverage mask + fBm + droplet erosion
     ForestMaskGenerator{0.6f, 2.0f},                        // Create fertility mask
     ForestPlacementGenerator{0.4f},                         // Stochastic planting
     TerrainTextureGenerator{}                               // Assign colours by biome
@@ -206,3 +223,6 @@ pipeline.execute(grid);
 
 ![Scene rendering](./demo/image2.png)
 
+![Scene rendering](./demo/image3.png)
+
+![Scene rendering](./demo/image4.png)
