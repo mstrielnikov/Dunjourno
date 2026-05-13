@@ -214,6 +214,43 @@ struct HybridTerrainGenerator {
         }
 
         // ═══════════════════════════════════════════════════════════════
+        // Phase 3.5: Edge falloff — iterative halve-and-floor at borders
+        // ═══════════════════════════════════════════════════════════════
+        // Instead of a uniform multiplier (which creates a flat-colored frame),
+        // we halve each cell's height with floor quantization for every step
+        // toward the border. This preserves the per-cell height variation so
+        // the coloring stays natural and semi-randomized at the edges.
+        {
+            int min_dim = std::min(w, h);
+
+            int margin = (min_dim < 128) ? 1 : 2;
+
+            // Quantization resolution: floor to nearest 0.05 before halving.
+            // This adds subtle stepping that breaks up uniform color banding.
+            constexpr float Q = 20.0f;  // 1/Q = 0.05 height resolution
+
+            for (int y = 0; y < h; ++y) {
+                for (int x = 0; x < w; ++x) {
+                    // Distance (in cells) from nearest edge
+                    int dist = std::min({x, w - 1 - x, y, h - 1 - y});
+                    
+                    if (dist <= margin) { // else Interior — untouched
+                        // Number of halving steps: more steps = closer to border
+                        int steps = margin - dist;
+                        float h_val = heightmap[y * w + x];
+
+                        for (int s = 0; s < steps; ++s) {
+                            // Halve with floor quantization: preserves per-cell variation
+                            h_val = std::floor(h_val * Q) / (2.0f * Q);
+                        }
+
+                        heightmap[y * w + x] = h_val;
+                    }
+                }
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
         // Phase 4: Write back to grid + classify
         // ═══════════════════════════════════════════════════════════════
         std::cout << "  Phase 4: Classifying terrain...\n";
@@ -227,7 +264,7 @@ struct HybridTerrainGenerator {
                 float height = std::max(heightmap[y * w + x], 0.0f);
                 cell.height = height;
 
-                if (pool_mask[y * w + x] && height > 0.1f) {
+                if (pool_mask[y * w + x]) {
                     cell.terrain = TerrainType::Mountain;
                 } else {
                     cell.terrain = TerrainType::Grass;
